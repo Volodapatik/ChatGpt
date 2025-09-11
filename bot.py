@@ -1,19 +1,19 @@
+import os
 import telebot
 import requests
 import datetime
 import re
 import json
-import os
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ==========================
-TELEGRAM_TOKEN = "8190669389:AAEStx12GMVbiNthRvXJ2Ks3AB8FGNADYnk"
-GEMINI_API_KEY = "AIzaSyAgAZKpUA0okxEG428a9x6ql_O4DzkSMR4"
-GOOGLE_API_KEY = "AIzaSyAjifVZ0gfxGz6zZCH5h2E3hgkrdTlEZM4"
-SEARCH_ENGINE_ID = "d24749d51b2724215"
-ADMIN_ID = 1637885523
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 1637885523))
 FREE_LIMIT = 30
-SUPPORT_USERNAME = "@нік"
+SUPPORT_USERNAME = "@uagptpredlozhkabot"
 # ==========================
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -187,8 +187,8 @@ def ask_gemini(user_id, question, context_messages=None):
         ⭐ Рейтинг (якщo відомий): 
         📖 Короткий опис сюжету (2-3 речення):
         
-        Якщо це серіал - вкажи кількість сезонів.
-        Якщо точно не знаєш - так і скажи, не вигадуй."""
+        Якщo це серіал - вкажи кількість сезонів.
+        Якщo точно не знаєш - так і скажи, не вигадуй."""
     
     elif any(word in question.lower() for word in code_keywords):
         prompt = f"""Ти експерт-програміст. Відповідай ЧІТКИМ КОДОМ на запит.
@@ -203,10 +203,10 @@ def ask_gemini(user_id, question, context_messages=None):
         2. Використовуй чітке форматування з ``` 
         3. Додай короткі коментарі для пояснення
         4. Переконайся що код працює
-        5. Якщо потрібно - вкажи яку мову програмування використовуєш"""
+        5. Якщo потрібно - вкажи яку мову програмування використовуєш"""
     
     else:
-        prompt = f"""Ти дружній та допоміжний AI-асистент. Відповідай природньо та зрозуміло.
+        prompt = f"""Ти дружній та допоміжний AI-асистент. Відповідай природньo та зрозуміло.
         
         Контекст попередньої розмови:
         {context_text}
@@ -217,7 +217,7 @@ def ask_gemini(user_id, question, context_messages=None):
         1. Будь природнім та дружнім
         2. Відповідай розгорнуто але не занадто довго
         3. Використовуй емодзі для кращої читабельності
-        4. Якщо питань про фільми/код - відповідай у спеціальному форматі
+        4. Якщo питань про фільми/код - відповідай у спеціальному форматі
         5. Будь корисним та інформативним"""
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
@@ -736,5 +736,6 @@ def handle_message(message):
         user["used"] += 1
         save_data()
 
-print("✅ Бот запущено з повним контролем часу та техпідтримкою!")
-bot.polling(none_stop=True)
+if __name__ == "__main__":
+    print("✅ Бот запущено з повним контролем часу та техпідтримкою!")
+    bot.polling(none_stop=True)
