@@ -732,11 +732,14 @@ def handle_copy(call):
         bot.answer_callback_query(call.id, "📋 Код скопійовано до буферу обміну!")
     else:
         bot.answer_callback_query(call.id, "❌ Немає коду для копіювання")
-
 @bot.message_handler(func=lambda m: True)
 def handle_message(message):
     user_id = message.from_user.id
-    if user_id not in user_data:
+    
+    # Перевірка чи юзер вже існує (правильна версія)
+    user_exists = any(uid == user_id for uid in user_data.keys())
+    
+    if not user_exists:
         user_data[user_id] = {
             "used": 0, 
             "premium": {"active": False, "until": None}, 
