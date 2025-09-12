@@ -4,6 +4,7 @@ import requests
 import datetime
 import re
 import json
+import pytz
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ==========================
@@ -15,6 +16,9 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", 1637885523))
 FREE_LIMIT = 30
 SUPPORT_USERNAME = "@uagptpredlozhkabot"
 # ==========================
+
+# Українська часова зона
+UKRAINE_TZ = pytz.timezone('Europe/Kiev')
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 user_data = {}
@@ -34,6 +38,10 @@ MOVIE_SITES = [
 movie_keywords = ["фільм", "серіал", "аніме", "мультфільм", "movie", "anime", "series", "кіно", "фильм", "сюжет", "сюжету", "опис"]
 code_keywords = ["код", "html", "css", "js", "javascript", "python", "створи", "скрипт", "програма", "create", "program"]
 
+def get_ukraine_time():
+    """Повертає поточний час України"""
+    return datetime.datetime.now(UKRAINE_TZ)
+
 def convert_dates(obj):
     if isinstance(obj, datetime.datetime):
         return obj.isoformat()
@@ -51,7 +59,11 @@ def restore_dates(obj):
             if isinstance(value, str):
                 try:
                     if 'T' in value:
-                        obj[key] = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+                        # Відновлюємо з урахуванням часового поясу
+                        dt = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+                        if dt.tzinfo is None:
+                            dt = UKRAINE_TZ.localize(dt)
+                        obj[key] = dt
                     elif len(value) == 10 and value.count('-') == 2:
                         obj[key] = datetime.date.fromisoformat(value)
                 except (ValueError, TypeError):
@@ -257,6 +269,8 @@ def admin_keyboard():
     kb.add(KeyboardButton("🎫 Керування промокодами"))
     kb.add(KeyboardButton("➕ Додати преміум"))
     kb.add(KeyboardButton("⏰ Преміум на час"))
+    kb.add(KeyboardButton("🗑️ Видалити користувача"))
+    kb.add(KeyboardButton("📊 Статистика"))
     kb.add(KeyboardButton("🔙 Головне меню"))
     return kb
 
@@ -292,7 +306,8 @@ def help_text():
         "⚙️ <b>Команди:</b>\n"
         "• /start - Запуск бота\n"
         "• /profile - Перегляд профілю\n"
-        "• /premium - Інформація про преміум\n\n"
+        "• /premium - Інформація про преміум\n"
+        "• /clearduplicates - Очистити дублікати (адмін)\n\n"
         f"🐞 <b>Знайшли баги чи є ідеї?</b>\n"
         f"Звертайтеся до техпідтримки: {SUPPORT_USERNAME}"
     )
@@ -306,7 +321,7 @@ def start(message):
         user_data[user_id] = {
             "used": 0,
             "premium": {"active": False, "until": None},
-            "reset": datetime.date.today().isoformat(),
+            "reset": get_ukraine_time().date().isoformat(),
             "history": [],
             "free_used": False,
             "last_movie_query": None,
@@ -327,7 +342,7 @@ def profile(message):
         start(message)
         return
     user = user_data[user_id]
-    today = datetime.date.today()
+    today = get_ukraine_time().date()
     
     if isinstance(user["reset"], str):
         reset_date = datetime.date.fromisoformat(user["reset"])
@@ -346,11 +361,14 @@ def profile(message):
         else:
             if isinstance(user["premium"]["until"], str):
                 until_date = datetime.datetime.fromisoformat(user["premium"]["until"])
+                if until_date.tzinfo is None:
+                    until_date = UKRAINE_TZ.localize(until_date)
             else:
                 until_date = user["premium"]["until"]
             
-            if until_date > datetime.datetime.now():
-                premium_status = f"✅ До {until_date.strftime('%d.%m.%Y %H:%M')}"
+            current_time = get_ukraine_time()
+            if until_date > current_time:
+                premium_status = f"✅ До {until_date.astimezone(UKRAINE_TZ).strftime('%d.%m.%Y %H:%M')}"
             else:
                 user["premium"] = {"active": False, "until": None}
                 save_data()
@@ -366,10 +384,30 @@ def profile(message):
         f"💎 <b>Преміум:</b> {premium_status}\n"
         f"💬 <b>Використано сьогодні:</b> {user['used']}\n"
         f"🔋 <b>Ліміт:</b> {limit_info}\n"
-        f"⏰ <b>Оновлення:</b> опівночі\n\n"
+        f"⏰ <b>Оновлення:</b> опівночі (за київським часом)\n\n"
         f"🐞 <b>Техпідтримка:</b> {SUPPORT_USERNAME}"
     )
     bot.reply_to(message, text, parse_mode='HTML')
+
+@bot.message_handler(commands=["clearduplicates"])
+def clear_duplicates(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    unique_users = {}
+    duplicates_removed = 0
+    
+    for uid, data in user_data.items():
+        if uid not in unique_users:
+            unique_users[uid] = data
+        else:
+            duplicates_removed += 1
+    
+    user_data.clear()
+    user_data.update(unique_users)
+    save_data()
+    
+    bot.reply_to(message, f"✅ Видалено {duplicates_removed} дублікатів! Залишилось {len(user_data)} унікальних користувачів")
 
 @bot.message_handler(func=lambda m: m.text == "🆘 Допомога")
 def help_menu(message):
@@ -422,7 +460,7 @@ def process_promocode(message):
                 }
                 time_text = "НАЗАВЖДИ"
             else:
-                until_date = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
+                until_date = get_ukraine_time() + datetime.timedelta(seconds=seconds)
                 user_data[user_id]["premium"] = {
                     "active": True,
                     "until": until_date.isoformat()
@@ -468,8 +506,10 @@ def user_list(message):
     for uid, data in user_data.items():
         premium_status = "✅" if data["premium"]["active"] else "❌"
         username = data.get('username', 'Немає')
-        text += f"ID: {uid} | @{username} | Преміум: {premium_status} | Використано: {data['used']}\n"
+        used = data.get('used', 0)
+        text += f"ID: {uid} | @{username} | Преміум: {premium_status} | Використано: {used}\n"
     
+    text += f"\n📊 <b>Всього користувачів:</b> {len(user_data)}"
     bot.reply_to(message, text, parse_mode='HTML')
 
 @bot.message_handler(func=lambda m: m.text == "🎫 Керування промокодами")
@@ -517,7 +557,7 @@ def process_add_premium(message):
             user_data[target_id] = {
                 "used": 0,
                 "premium": {"active": False, "until": None},
-                "reset": datetime.date.today().isoformat(),
+                "reset": get_ukraine_time().date().isoformat(),
                 "history": [],
                 "free_used": False,
                 "last_movie_query": None,
@@ -532,7 +572,7 @@ def process_add_premium(message):
             }
             time_text = "НАЗАВЖДИ"
         else:
-            until_date = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
+            until_date = get_ukraine_time() + datetime.timedelta(seconds=seconds)
             user_data[target_id]["premium"] = {
                 "active": True,
                 "until": until_date.isoformat()
@@ -571,13 +611,14 @@ def process_premium_custom_time(message):
         date_str = parts[1]
         
         day, month, year = map(int, date_str.split('.'))
-        end_date = datetime.datetime(year, month, day, 23, 59, 59)
+        # Створюємо datetime з українським часом
+        end_date = UKRAINE_TZ.localize(datetime.datetime(year, month, day, 23, 59, 59))
         
         if target_id not in user_data:
             user_data[target_id] = {
                 "used": 0,
                 "premium": {"active": False, "until": None},
-                "reset": datetime.date.today().isoformat(),
+                "reset": get_ukraine_time().date().isoformat(),
                 "history": [],
                 "free_used": False,
                 "last_movie_query": None,
@@ -600,6 +641,56 @@ def process_premium_custom_time(message):
             
     except (ValueError, IndexError):
         bot.reply_to(message, "❌ Невірний формат! Використовуйте: ID ДД.ММ.РРРР")
+
+@bot.message_handler(func=lambda m: m.text == "🗑️ Видалити користувача")
+def delete_user_menu(message):
+    user_id = message.from_user.id
+    if user_id != ADMIN_ID:
+        return
+    
+    msg = bot.reply_to(message, "👤 Введіть ID користувача для видалення:", parse_mode='HTML')
+    bot.register_next_step_handler(msg, process_delete_user)
+
+def process_delete_user(message):
+    user_id = message.from_user.id
+    if user_id != ADMIN_ID:
+        return
+    
+    try:
+        target_id = int(message.text)
+        
+        if target_id in user_data:
+            del user_data[target_id]
+            save_data()
+            bot.reply_to(message, f"✅ Користувача з ID {target_id} видалено!")
+        else:
+            bot.reply_to(message, "❌ Користувача з таким ID не знайдено!")
+            
+    except ValueError:
+        bot.reply_to(message, "❌ Невірний формат! Введіть числовий ID")
+
+@bot.message_handler(func=lambda m: m.text == "📊 Статистика")
+def show_stats(message):
+    user_id = message.from_user.id
+    if user_id != ADMIN_ID:
+        return
+    
+    total_users = len(user_data)
+    premium_users = sum(1 for user in user_data.values() if user["premium"]["active"])
+    free_users = total_users - premium_users
+    total_used = sum(user.get("used", 0) for user in user_data.values())
+    
+    text = (
+        f"📊 <b>Статистика бота:</b>\n\n"
+        f"👥 <b>Всього користувачів:</b> {total_users}\n"
+        f"💎 <b>Преміум користувачів:</b> {premium_users}\n"
+        f"👤 <b>Звичайних користувачів:</b> {free_users}\n"
+        f"💬 <b>Загальна кількість запитів:</b> {total_used}\n"
+        f"⏰ <b>Час сервера:</b> {get_ukraine_time().strftime('%d.%m.%Y %H:%M:%S')}\n\n"
+        f"🐞 <b>Техпідтримка:</b> {SUPPORT_USERNAME}"
+    )
+    
+    bot.reply_to(message, text, parse_mode='HTML')
 
 @bot.message_handler(commands=["addpromo"])
 def add_promocode(message):
@@ -649,7 +740,7 @@ def handle_message(message):
         user_data[user_id] = {
             "used": 0, 
             "premium": {"active": False, "until": None}, 
-            "reset": datetime.date.today().isoformat(), 
+            "reset": get_ukraine_time().date().isoformat(), 
             "history": [], 
             "free_used": False,
             "last_movie_query": None,
@@ -659,7 +750,7 @@ def handle_message(message):
         save_data()
     
     user = user_data[user_id]
-    today = datetime.date.today()
+    today = get_ukraine_time().date()
     
     if isinstance(user["reset"], str):
         reset_date = datetime.date.fromisoformat(user["reset"])
@@ -674,10 +765,13 @@ def handle_message(message):
     if user["premium"]["active"] and user["premium"]["until"] is not None:
         if isinstance(user["premium"]["until"], str):
             until_date = datetime.datetime.fromisoformat(user["premium"]["until"])
+            if until_date.tzinfo is None:
+                until_date = UKRAINE_TZ.localize(until_date)
         else:
             until_date = user["premium"]["until"]
         
-        if until_date < datetime.datetime.now():
+        current_time = get_ukraine_time()
+        if until_date < current_time:
             user["premium"] = {"active": False, "until": None}
             save_data()
 
@@ -737,5 +831,5 @@ def handle_message(message):
         save_data()
 
 if __name__ == "__main__":
-    print("✅ Бот запущено з повним контролем часу та техпідтримкою!")
+    print("✅ Бот запущено з українським часом та покращеним керуванням!")
     bot.polling(none_stop=True)
