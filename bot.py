@@ -98,7 +98,8 @@ def load_data():
                 return
                 
             data = json.loads(content)
-            user_data = restore_dates(data.get('user_data', {}))
+            # Конвертуємо всі ключі в int при завантаженні
+            user_data = {int(k): restore_dates(v) for k, v in data.get('user_data', {}).items()}
             promo_codes = data.get('promo_codes', promo_codes)
             
     except json.JSONDecodeError:
@@ -374,20 +375,243 @@ def profile(message):
                 save_data()
     
     role = "👑 Адміністратор" if user_id == ADMIN_ID else ("💎 Преміум" if user["premium"]["active"] else "👤 Користувач")
-    limit_info = "♾️ Необмежено" if (user["premium"]["active"] or user_id == ADMIN_ID) else f"{FREE_LIMIT - user['used']} / {FREE_LIMIT}"
+    limit_info = "♾️ Необмежено" if (user["premium"]["active"] or user_id == ADMIN_ID) else f"{user['used']}/{FREE_LIMIT}"
     
-    text = (
+    profile_text = (
         f"📊 <b>Профіль:</b>\n\n"
-        f"🆔 <b>ID:</b> {user_id}\n"
-        f"👤 <b>Ім'я:</b> @{user.get('username', 'Немає')}\n"
-        f"🎭 <b>Роль:</b> {role}\n"
-        f"💎 <b>Преміум:</b> {premium_status}\n"
-        f"💬 <b>Використано сьогодні:</b> {user['used']}\n"
-        f"🔋 <b>Ліміт:</b> {limit_info}\n"
-        f"⏰ <b>Оновлення:</b> опівночі (за київським часом)\n\n"
-        f"🐞 <b>Техпідтримка:</b> {SUPPORT_USERNAME}"
+        f"🆔 ID: {user_id}\n"
+        f"👤 Ім'я: @{user.get('username', 'unknown')}\n"
+        f"🎭 Роль: {role}\n"
+        f"💎 Преміум: {premium_status}\n"
+        f"💬 Використано сьогодні: {user['used']}\n"
+        f"🔋 Ліміт: {limit_info}\n"
+        f"⏰ Оновлення: опівночі (за київським часом)\n\n"
+        f"🐞 Техпідтримка: {SUPPORT_USERNAME}"
     )
-    bot.reply_to(message, text, parse_mode='HTML')
+    bot.reply_to(message, profile_text, parse_mode="HTML")
+
+@bot.message_handler(commands=["premium"])
+def premium_command(message):
+    premium_info(message)
+
+@bot.message_handler(func=lambda m: m.text == "💎 Преміум")
+def premium_info(message):
+    text = (
+        "💎 <b>Преміум підписка:</b>\n\n"
+        "✅ <b>Переваги:</b>\n"
+        "• ♾️ Необмежена кількість запитів\n"
+        "• ⚡ Пріоритетна обробка запитів\n"
+        "• 🎬 Детальніші відповіді про фільми\n"
+        "• 💻 Більш складний код\n\n"
+        "🎫 <b>Отримати преміум:</b>\n"
+        "• Введіть промокод\n"
+        "• Придбайте підписку\n\n"
+        "💳 <b>Ціни:</b>\n"
+        "• 1 день - 50 грн\n"
+        "• 7 днів - 250 грн\n"
+        "• 30 днів - 800 грн\n\n"
+        "📱 Для придбання звертайтеся до @uagptpredlozhkabot"
+    )
+    bot.reply_to(message, text, parse_mode="HTML", reply_markup=premium_menu_keyboard())
+
+@bot.message_handler(func=lambda m: m.text == "🎫 Ввести промокод")
+def enter_promo(message):
+    bot.reply_to(message, "🔑 Введіть ваш промокод:")
+    bot.register_next_step_handler(message, process_promo)
+
+def process_promo(message):
+    user_id = message.from_user.id
+    promo = message.text.strip().upper()
+    
+    if promo in promo_codes:
+        code_data = promo_codes[promo]
+        if code_data["uses_left"] > 0:
+            if user_data[user_id]["premium"]["active"]:
+                current_until = user_data[user_id]["premium"]["until"]
+                if current_until is None:
+                    bot.reply_to(message, "❌ У вас вже є безстроковий преміум!")
+                    return
+                
+                if isinstance(current_until, str):
+                    current_until = datetime.datetime.fromisoformat(current_until)
+                    if current_until.tzinfo is None:
+                        current_until = UKRAINE_TZ.localize(current_until)
+                
+                new_until = current_until + datetime.timedelta(seconds=code_data["seconds"])
+            else:
+                new_until = get_ukraine_time() + datetime.timedelta(seconds=code_data["seconds"])
+            
+            user_data[user_id]["premium"] = {
+                "active": True,
+                "until": new_until
+            }
+            code_data["uses_left"] -= 1
+            save_data()
+            
+            bot.reply_to(message, f"✅ Преміум активовано до {new_until.astimezone(UKRAINE_TZ).strftime('%d.%m.%Y %H:%M')}!")
+        else:
+            bot.reply_to(message, "❌ Промокод вичерпано!")
+    else:
+        bot.reply_to(message, "❌ Невірний промокод!")
+
+@bot.message_handler(func=lambda m: m.text == "💳 Кучити преміум")
+def buy_premium(message):
+    bot.reply_to(message, "💳 Для придбання преміум підписки зверніться до @uagptpredlozhkabot")
+
+@bot.message_handler(func=lambda m: m.text == "🆘 Допомога")
+def help_command(message):
+    bot.reply_to(message, help_text(), parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "⚙️ Адмін панель" and m.from_user.id == ADMIN_ID)
+def admin_panel(message):
+    bot.reply_to(message, "⚙️ <b>Адмін панель:</b>", parse_mode="HTML", reply_markup=admin_keyboard())
+
+@bot.message_handler(func=lambda m: m.text == "🔙 Головне меню")
+def back_to_main(message):
+    bot.reply_to(message, "🏠 <b>Головне меню:</b>", parse_mode="HTML", reply_markup=main_menu())
+
+@bot.message_handler(func=lambda m: m.text == "👥 Список користувачів" and m.from_user.id == ADMIN_ID)
+def user_list(message):
+    users_text = "👥 <b>Список користувачів:</b>\n\n"
+    for uid, data in list(user_data.items())[:50]:
+        premium_status = "✅" if data["premium"]["active"] else "❌"
+        users_text += f"ID: {uid} | @{data.get('username', 'unknown')} | Преміум: {premium_status} | Використано: {data['used']}\n"
+    
+    users_text += f"\n📊 Всього користувачів: {len(user_data)}"
+    bot.reply_to(message, users_text, parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "🎫 Керування промокодами" and m.from_user.id == ADMIN_ID)
+def manage_promos(message):
+    promos_text = "🎫 <b>Промокоди:</b>\n\n"
+    for code, data in promo_codes.items():
+        promos_text += f"🔑 {code}: {data['uses_left']} використань | {format_time(data['seconds'])}\n"
+    
+    promos_text += "\n➕ Додати новий: /addpromo код час використань\n❌ Видалити: /removepromo код"
+    bot.reply_to(message, promos_text, parse_mode="HTML")
+
+@bot.message_handler(commands=["addpromo"])
+def add_promo(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) < 4:
+            bot.reply_to(message, "❌ Використання: /addpromo код час використань\nНаприклад: /addpromo TEST1H 3600 50")
+            return
+        
+        code = parts[1].upper()
+        seconds = int(parts[2])
+        uses = int(parts[3])
+        
+        promo_codes[code] = {"seconds": seconds, "uses_left": uses}
+        save_data()
+        bot.reply_to(message, f"✅ Промокод {code} додано!")
+    except:
+        bot.reply_to(message, "❌ Помилка формату!")
+
+@bot.message_handler(commands=["removepromo"])
+def remove_promo(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        code = message.text.split()[1].upper()
+        if code in promo_codes:
+            del promo_codes[code]
+            save_data()
+            bot.reply_to(message, f"✅ Промокод {code} видалено!")
+        else:
+            bot.reply_to(message, "❌ Промокод не знайдено!")
+    except:
+        bot.reply_to(message, "❌ Використання: /removepromo код")
+
+@bot.message_handler(func=lambda m: m.text == "➕ Додати преміум" and m.from_user.id == ADMIN_ID)
+def add_premium_prompt(message):
+    bot.reply_to(message, "👤 Введіть ID користувача для надання преміуму:")
+    bot.register_next_step_handler(message, process_add_premium)
+
+def process_add_premium(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        user_id = int(message.text.strip())
+        user_data[user_id]["premium"] = {"active": True, "until": None}
+        save_data()
+        bot.reply_to(message, f"✅ Безстроковий преміум надано користувачу {user_id}!")
+    except:
+        bot.reply_to(message, "❌ Помилка! Перевірте ID.")
+
+@bot.message_handler(func=lambda m: m.text == "⏰ Преміум на час" and m.from_user.id == ADMIN_ID)
+def timed_premium_prompt(message):
+    bot.reply_to(message, "👤 Введіть ID користувача та час у форматі: id час\nНаприклад: 1234567 7d")
+    bot.register_next_step_handler(message, process_timed_premium)
+
+def process_timed_premium(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) < 2:
+            bot.reply_to(message, "❌ Використання: id час\nНаприклад: 1234567 7d")
+            return
+        
+        user_id = int(parts[0])
+        time_input = " ".join(parts[1:])
+        
+        seconds = parse_time_input(time_input)
+        if seconds is None:
+            bot.reply_to(message, "❌ Невірний формат часу!")
+            return
+        
+        until_time = get_ukraine_time() + datetime.timedelta(seconds=seconds)
+        user_data[user_id]["premium"] = {
+            "active": True,
+            "until": until_time
+        }
+        save_data()
+        
+        bot.reply_to(message, f"✅ Преміум надано користувачу {user_id} до {until_time.astimezone(UKRAINE_TZ).strftime('%d.%m.%Y %H:%M')}!")
+    except:
+        bot.reply_to(message, "❌ Помилка! Перевірте введені дані.")
+
+@bot.message_handler(func=lambda m: m.text == "🗑️ Видалити користувача" and m.from_user.id == ADMIN_ID)
+def delete_user_prompt(message):
+    bot.reply_to(message, "👤 Введіть ID користувача для видалення:")
+    bot.register_next_step_handler(message, process_delete_user)
+
+def process_delete_user(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        user_id = int(message.text.strip())
+        if user_id in user_data:
+            del user_data[user_id]
+            save_data()
+            bot.reply_to(message, f"✅ Користувача {user_id} видалено!")
+        else:
+            bot.reply_to(message, "❌ Користувача не знайдено!")
+    except:
+        bot.reply_to(message, "❌ Помилка! Перевірте ID.")
+
+@bot.message_handler(func=lambda m: m.text == "📊 Статистика" and m.from_user.id == ADMIN_ID)
+def stats(message):
+    total_users = len(user_data)
+    premium_users = sum(1 for u in user_data.values() if u["premium"]["active"])
+    total_used = sum(u["used"] for u in user_data.values())
+    
+    stats_text = (
+        f"📊 <b>Статистика:</b>\n\n"
+        f"👥 Користувачів: {total_users}\n"
+        f"💎 Преміум: {premium_users}\n"
+        f"🔢 Звичайних: {total_users - premium_users}\n"
+        f"💬 Запитів сьогодні: {total_used}\n"
+        f"🎫 Промокодів: {len(promo_codes)}"
+    )
+    bot.reply_to(message, stats_text, parse_mode="HTML")
 
 @bot.message_handler(commands=["clearduplicates"])
 def clear_duplicates(message):
@@ -409,342 +633,26 @@ def clear_duplicates(message):
     
     bot.reply_to(message, f"✅ Видалено {duplicates_removed} дублікатів! Залишилось {len(user_data)} унікальних користувачів")
 
-@bot.message_handler(func=lambda m: m.text == "🆘 Допомога")
-def help_menu(message):
-    bot.reply_to(message, help_text(), parse_mode='HTML')
-
-@bot.message_handler(commands=["premium"])
-def premium_command(message):
-    premium_main(message)
-
-@bot.message_handler(func=lambda m: m.text == "💎 Преміум")
-def premium_main(message):
-    user_id = message.from_user.id
-    if user_id not in user_data:
-        start(message)
-        return
-    
-    user = user_data[user_id]
-    if user["premium"]["active"]:
-        bot.reply_to(message, "💎 У тебе вже активовано преміум!", reply_markup=main_menu())
-    else:
-        text = (
-            "💎 <b>Преміум підписка:</b>\n\n"
-            "✨ <b>Переваги преміуму:</b>\n"
-            "• ♾️ Необмежена кількість запитів\n"
-            "• ⚡ Пріоритетна обробка\n"
-            "• 🎬 Детальніші відповіді\n"
-            "• 💻 Більше можливостей для коду\n\n"
-            "🎫 <b>Маєш промокод?</b> Обери 'Ввести промокод'\n"
-            "💳 <b>Бажаєш придбати?</b> Обери 'Купити преміум'\n\n"
-            f"🐞 <b>Техпідтримка:</b> {SUPPORT_USERNAME}"
-        )
-        bot.reply_to(message, text, parse_mode='HTML', reply_markup=premium_menu_keyboard())
-
-@bot.message_handler(func=lambda m: m.text == "🎫 Ввести промокод")
-def enter_promocode(message):
-    msg = bot.reply_to(message, "🔑 Введіть ваш промокод:")
-    bot.register_next_step_handler(msg, process_promocode)
-
-def process_promocode(message):
-    user_id = message.from_user.id
-    promo = message.text.upper().strip()
-    
-    if promo in promo_codes:
-        if promo_codes[promo]["uses_left"] > 0:
-            seconds = promo_codes[promo]["seconds"]
-            if seconds is None:
-                user_data[user_id]["premium"] = {
-                    "active": True,
-                    "until": None
-                }
-                time_text = "НАЗАВЖДИ"
-            else:
-                until_date = get_ukraine_time() + datetime.timedelta(seconds=seconds)
-                user_data[user_id]["premium"] = {
-                    "active": True,
-                    "until": until_date.isoformat()
-                }
-                time_text = format_time(seconds)
-            
-            promo_codes[promo]["uses_left"] -= 1
-            save_data()
-            
-            bot.reply_to(message, f"🎉 Вітаю! Преміум активовано на {time_text}! 🎊", reply_markup=main_menu())
-        else:
-            bot.reply_to(message, "❌ Цей промокод вже вичерпано!", reply_markup=main_menu())
-    else:
-        bot.reply_to(message, "❌ Невірний промокод!", reply_markup=main_menu())
-
-@bot.message_handler(func=lambda m: m.text == "💳 Купити преміум")
-def buy_premium(message):
-    text = (
-        f"💳 <b>Для придбання преміуму:</b>\n\n"
-        f"📞 <b>Зв'яжіться з адміністратором:</b> {SUPPORT_USERNAME}\n"
-        f"💬 <b>Напишіть ваш ID:</b> {message.from_user.id}\n"
-        f"💰 <b>Вартість:</b> 100 грн/місяць\n\n"
-        f"🎫 <b>Або спробуйте ввести промокод!</b>\n\n"
-        f"🐞 <b>Техпідтримка:</b> {SUPPORT_USERNAME}"
-    )
-    bot.reply_to(message, text, parse_mode='HTML', reply_markup=premium_menu_keyboard())
-
-@bot.message_handler(func=lambda m: m.text == "⚙️ Адмін панель")
-def admin_panel(message):
-    user_id = message.from_user.id
-    if user_id != ADMIN_ID:
-        bot.reply_to(message, "❌ Це меню доступне тільки адміну!")
-        return
-    bot.reply_to(message, "⚙️ Панель адміністратора", reply_markup=admin_keyboard())
-
-@bot.message_handler(func=lambda m: m.text == "👥 Список користувачів")
-def user_list(message):
-    user_id = message.from_user.id
-    if user_id != ADMIN_ID:
-        return
-    
-    text = "👥 <b>Список користувачів:</b>\n\n"
-    for uid, data in user_data.items():
-        premium_status = "✅" if data["premium"]["active"] else "❌"
-        username = data.get('username', 'Немає')
-        used = data.get('used', 0)
-        text += f"ID: {uid} | @{username} | Преміум: {premium_status} | Використано: {used}\n"
-    
-    text += f"\n📊 <b>Всього користувачів:</b> {len(user_data)}"
-    bot.reply_to(message, text, parse_mode='HTML')
-
-@bot.message_handler(func=lambda m: m.text == "🎫 Керування промокодами")
-def manage_promocodes(message):
-    user_id = message.from_user.id
-    if user_id != ADMIN_ID:
-        return
-    
-    text = "🎫 <b>Поточні промокоди:</b>\n\n"
-    for code, info in promo_codes.items():
-        time_text = format_time(info['seconds'])
-        text += f"<code>{code}</code>: {time_text} | Залишилось: {info['uses_left']}\n"
-    
-    text += f"\n📝 <b>Для додавання нового промокоду:</b>\n<code>/addpromo КОД ЧАС КІЛЬКІСТЬ</code>\n\n"
-    text += f"⏰ <b>Формат часу:</b> 1m, 2h, 3d, 1month, forever\n"
-    text += f"🐞 <b>Техпідтримка:</b> {SUPPORT_USERNAME}"
-    
-    bot.reply_to(message, text, parse_mode='HTML')
-
-@bot.message_handler(func=lambda m: m.text == "➕ Додати преміум")
-def add_premium_menu(message):
-    user_id = message.from_user.id
-    if user_id != ADMIN_ID:
-        return
-    
-    msg = bot.reply_to(message, "👤 Введіть ID користувача та термін через пробіл:\nНаприклад: <code>123456789 30d</code>\n\nДоступні формати: 1m, 2h, 3d, 1month, forever", parse_mode='HTML')
-    bot.register_next_step_handler(msg, process_add_premium)
-
-def process_add_premium(message):
-    user_id = message.from_user.id
-    if user_id != ADMIN_ID:
-        return
-    
-    try:
-        parts = message.text.split()
-        target_id = int(parts[0])
-        time_input = " ".join(parts[1:])
-        
-        seconds = parse_time_input(time_input)
-        if seconds is None and time_input.lower() != "forever":
-            bot.reply_to(message, "❌ Невірний формат часу! Використовуйте: 1m, 2h, 3d, 1month, forever")
+@bot.callback_query_handler(func=lambda call: call.data.startswith("copy_"))
+def copy_code(call):
+    code_hash = call.data[5:]
+    for user in user_data.values():
+        if user["last_code"] and hash(user["last_code"]) == int(code_hash):
+            bot.answer_callback_query(call.id, "📋 Код скопійовано в буфер обміну!")
             return
-        
-        if target_id not in user_data:
-            user_data[target_id] = {
-                "used": 0,
-                "premium": {"active": False, "until": None},
-                "reset": get_ukraine_time().date().isoformat(),
-                "history": [],
-                "free_used": False,
-                "last_movie_query": None,
-                "last_code": None,
-                "username": "unknown"
-            }
-        
-        if seconds is None:
-            user_data[target_id]["premium"] = {
-                "active": True,
-                "until": None
-            }
-            time_text = "НАЗАВЖДИ"
-        else:
-            until_date = get_ukraine_time() + datetime.timedelta(seconds=seconds)
-            user_data[target_id]["premium"] = {
-                "active": True,
-                "until": until_date.isoformat()
-            }
-            time_text = format_time(seconds)
-        
-        save_data()
-        
-        bot.reply_to(message, f"✅ Преміум додано для ID {target_id} на {time_text}!")
-        
-        try:
-            bot.send_message(target_id, f"🎉 Вам надано преміум на {time_text} адміністратором!")
-        except:
-            pass
-            
-    except (ValueError, IndexError):
-        bot.reply_to(message, "❌ Невірний формат! Використовуйте: ID ЧАС")
+    bot.answer_callback_query(call.id, "❌ Код вже не актуальний!")
 
-@bot.message_handler(func=lambda m: m.text == "⏰ Преміум на час")
-def premium_custom_time(message):
-    user_id = message.from_user.id
-    if user_id != ADMIN_ID:
-        return
-    
-    msg = bot.reply_to(message, "👤 Введіть ID користувача та дату завершення (дд.мм.рррр):\nНаприклад: <code>123456789 31.12.2024</code>", parse_mode='HTML')
-    bot.register_next_step_handler(msg, process_premium_custom_time)
-
-def process_premium_custom_time(message):
-    user_id = message.from_user.id
-    if user_id != ADMIN_ID:
-        return
-    
-    try:
-        parts = message.text.split()
-        target_id = int(parts[0])
-        date_str = parts[1]
-        
-        day, month, year = map(int, date_str.split('.'))
-        # Створюємо datetime з українським часом
-        end_date = UKRAINE_TZ.localize(datetime.datetime(year, month, day, 23, 59, 59))
-        
-        if target_id not in user_data:
-            user_data[target_id] = {
-                "used": 0,
-                "premium": {"active": False, "until": None},
-                "reset": get_ukraine_time().date().isoformat(),
-                "history": [],
-                "free_used": False,
-                "last_movie_query": None,
-                "last_code": None,
-                "username": "unknown"
-            }
-        
-        user_data[target_id]["premium"] = {
-            "active": True,
-            "until": end_date.isoformat()
-        }
-        save_data()
-        
-        bot.reply_to(message, f"✅ Преміум додано для ID {target_id} до {end_date.strftime('%d.%m.%Y')}!")
-        
-        try:
-            bot.send_message(target_id, f"🎉 Вам надано преміум до {end_date.strftime('%d.%m.%Y')} адміністратором!")
-        except:
-            pass
-            
-    except (ValueError, IndexError):
-        bot.reply_to(message, "❌ Невірний формат! Використовуйте: ID ДД.ММ.РРРР")
-
-@bot.message_handler(func=lambda m: m.text == "🗑️ Видалити користувача")
-def delete_user_menu(message):
-    user_id = message.from_user.id
-    if user_id != ADMIN_ID:
-        return
-    
-    msg = bot.reply_to(message, "👤 Введіть ID користувача для видалення:", parse_mode='HTML')
-    bot.register_next_step_handler(msg, process_delete_user)
-
-def process_delete_user(message):
-    user_id = message.from_user.id
-    if user_id != ADMIN_ID:
-        return
-    
-    try:
-        target_id = int(message.text)
-        
-        if target_id in user_data:
-            del user_data[target_id]
-            save_data()
-            bot.reply_to(message, f"✅ Користувача з ID {target_id} видалено!")
-        else:
-            bot.reply_to(message, "❌ Користувача з таким ID не знайдено!")
-            
-    except ValueError:
-        bot.reply_to(message, "❌ Невірний формат! Введіть числовий ID")
-
-@bot.message_handler(func=lambda m: m.text == "📊 Статистика")
-def show_stats(message):
-    user_id = message.from_user.id
-    if user_id != ADMIN_ID:
-        return
-    
-    total_users = len(user_data)
-    premium_users = sum(1 for user in user_data.values() if user["premium"]["active"])
-    free_users = total_users - premium_users
-    total_used = sum(user.get("used", 0) for user in user_data.values())
-    
-    text = (
-        f"📊 <b>Статистика бота:</b>\n\n"
-        f"👥 <b>Всього користувачів:</b> {total_users}\n"
-        f"💎 <b>Преміум користувачів:</b> {premium_users}\n"
-        f"👤 <b>Звичайних користувачів:</b> {free_users}\n"
-        f"💬 <b>Загальна кількість запитів:</b> {total_used}\n"
-        f"⏰ <b>Час сервера:</b> {get_ukraine_time().strftime('%d.%m.%Y %H:%M:%S')}\n\n"
-        f"🐞 <b>Техпідтримка:</b> {SUPPORT_USERNAME}"
-    )
-    
-    bot.reply_to(message, text, parse_mode='HTML')
-
-@bot.message_handler(commands=["addpromo"])
-def add_promocode(message):
-    user_id = message.from_user.id
-    if user_id != ADMIN_ID:
-        return
-    
-    try:
-        parts = message.text.split()
-        if len(parts) < 3:
-            bot.reply_to(message, "❌ Невірний формат! Використовуйте: /addpromo КОД ЧАС [КІЛЬКІСТЬ]")
-            return
-            
-        code = parts[1].upper()
-        time_input = parts[2]
-        uses = int(parts[3]) if len(parts) > 3 else 1
-        
-        seconds = parse_time_input(time_input)
-        if seconds is None and time_input.lower() != "forever":
-            bot.reply_to(message, "❌ Невірний формат часу! Використовуйте: 1m, 2h, 3d, 1month, forever")
-            return
-        
-        promo_codes[code] = {"seconds": seconds, "uses_left": uses}
-        save_data()
-        
-        time_text = format_time(seconds)
-        bot.reply_to(message, f"✅ Промокод {code} додано: {time_text}, {uses} використань")
-    except (IndexError, ValueError):
-        bot.reply_to(message, "❌ Невірний формат! Використовуйте: /addpromo КОД ЧАС [КІЛЬКІСТЬ]")
-
-@bot.message_handler(func=lambda m: m.text == "🔙 Головне меню")
-def back_to_main(message):
-    bot.reply_to(message, "🔙 Повертаємось до головного меню", reply_markup=main_menu())
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('copy_'))
-def handle_copy(call):
-    user_id = call.from_user.id
-    if user_id in user_data and user_data[user_id]["last_code"]:
-        bot.answer_callback_query(call.id, "📋 Код скопійовано до буферу обміну!")
-    else:
-        bot.answer_callback_query(call.id, "❌ Немає коду для копіювання")
 @bot.message_handler(func=lambda m: True)
 def handle_message(message):
     user_id = message.from_user.id
     
-    # Перевірка чи юзер вже існує (правильна версія)
-    user_exists = any(uid == user_id for uid in user_data.keys())
-    
-    if not user_exists:
+    # Переконуємося що користувач є в базі
+    if user_id not in user_data:
         user_data[user_id] = {
-            "used": 0, 
-            "premium": {"active": False, "until": None}, 
-            "reset": get_ukraine_time().date().isoformat(), 
-            "history": [], 
+            "used": 0,
+            "premium": {"active": False, "until": None},
+            "reset": get_ukraine_time().date().isoformat(),
+            "history": [],
             "free_used": False,
             "last_movie_query": None,
             "last_code": None,
@@ -755,6 +663,7 @@ def handle_message(message):
     user = user_data[user_id]
     today = get_ukraine_time().date()
     
+    # Перевіряємо чи потрібно скинути лічильник
     if isinstance(user["reset"], str):
         reset_date = datetime.date.fromisoformat(user["reset"])
     else:
@@ -765,6 +674,7 @@ def handle_message(message):
         user["reset"] = today.isoformat()
         save_data()
     
+    # Перевіряємо чи не закінчився преміум
     if user["premium"]["active"] and user["premium"]["until"] is not None:
         if isinstance(user["premium"]["until"], str):
             until_date = datetime.datetime.fromisoformat(user["premium"]["until"])
@@ -773,66 +683,49 @@ def handle_message(message):
         else:
             until_date = user["premium"]["until"]
         
-        current_time = get_ukraine_time()
-        if until_date < current_time:
+        if until_date < get_ukraine_time():
             user["premium"] = {"active": False, "until": None}
             save_data()
-
-    if not user["premium"]["active"] and user_id != ADMIN_ID:
-        if user["used"] >= FREE_LIMIT:
-            bot.reply_to(message, f"⚠️ Ліміт вичерпано! Спробуй завтра або звернись до адміністратора.\n\n🐞 Техпідтримка: {SUPPORT_USERNAME}")
-            return
-
-    query = message.text
     
-    context_messages = []
-    if user["last_movie_query"] and (query.isdigit() or any(word in query.lower() for word in ["год", "рік", "країна", "страна", "жанр", "сюжет"])):
-        context_messages.append(f"👤: {user['last_movie_query']}")
-        full_query = f"{user['last_movie_query']} {query}"
-    else:
-        full_query = query
-        if any(word in query.lower() for word in movie_keywords):
-            user["last_movie_query"] = query
+    # Перевіряємо ліміти
+    is_premium = user["premium"]["active"] or user_id == ADMIN_ID
+    if not is_premium and user["used"] >= FREE_LIMIT:
+        if not user["free_used"]:
+            user["free_used"] = True
+            save_data()
+            bot.reply_to(message, f"❌ Ви вичерпали безкоштовний ліміт ({FREE_LIMIT} запитів на день).\n\n💎 Отримайте преміум для необмежених запитів!", reply_markup=premium_menu_keyboard())
         else:
-            user["last_movie_query"] = None
-
-    for hist_msg in user["history"][-4:]:
-        context_messages.append(hist_msg)
-
-    is_movie_query = any(word in full_query.lower() for word in movie_keywords)
-    is_code_query = any(word in full_query.lower() for word in code_keywords)
+            bot.reply_to(message, f"❌ Ліміт вичерпано! Спробуйте завтра або отримайте преміум 💎", reply_markup=premium_menu_keyboard())
+        return
+    
+    # Обробляємо запит
+    user["used"] += 1
+    user["history"].append(message.text)
+    if len(user["history"]) > 10:
+        user["history"].pop(0)
+    
+    save_data()
+    
+    # Визначаємо тип запиту
+    question = message.text.lower()
+    is_movie_query = any(word in question for word in movie_keywords)
+    is_code_query = any(word in question for word in code_keywords)
     
     if is_movie_query:
-        search_query = re.sub(r'[^a-zA-Zа-яА-Я0-9\s]', '', full_query)
-        google_results = google_search(search_query + " фільм серіал аніме опис сюжету", "movie")
-        gemini_reply = ask_gemini(user_id, full_query, context_messages)
-        reply_text = f"{gemini_reply}\n\n🔍 Результати пошуку:\n{google_results}"
-        reply_markup = None
+        user["last_movie_query"] = message.text
+        search_results = google_search(message.text)
+        if "🔍 Нічого не знайдено" not in search_results:
+            bot.reply_to(message, f"🔍 <b>Результати пошуку:</b>\n\n{search_results}\n\n📝 <b>А ось детальна інформація:</b>", parse_mode="HTML")
     
-    elif is_code_query:
-        gemini_reply = ask_gemini(user_id, full_query, context_messages)
-        reply_text = gemini_reply
-        user["last_code"] = gemini_reply
-        reply_markup = create_copy_button(gemini_reply)
+    # Відправляємо запит до AI
+    bot.send_chat_action(message.chat.id, "typing")
+    response = ask_gemini(user_id, message.text, user["history"])
     
+    if is_code_query and "```" in response:
+        user["last_code"] = response
+        bot.reply_to(message, response, parse_mode="Markdown", reply_markup=create_copy_button(response))
     else:
-        gemini_reply = ask_gemini(user_id, full_query, context_messages)
-        reply_text = gemini_reply
-        reply_markup = None
+        bot.reply_to(message, response)
 
-    user["history"].append(f"👤: {query}")
-    user["history"].append(f"🤖: {reply_text[:100]}...")
-    save_data()
-
-    if reply_markup:
-        bot.reply_to(message, reply_text, reply_markup=reply_markup, parse_mode='Markdown')
-    else:
-        bot.reply_to(message, reply_text)
-
-    if not user["premium"]["active"] and user_id != ADMIN_ID:
-        user["used"] += 1
-        save_data()
-
-if __name__ == "__main__":
-    print("✅ Бот запущено з українським часом та покращеним керуванням!")
-    bot.polling(none_stop=True)
+print("🤖 Бот запущено!")
+bot.infinity_polling()
