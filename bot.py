@@ -731,10 +731,7 @@ def handle_message(message):
 if __name__ == "__main__":
     print("✅ Бот запущено з українським часом та покращеним керуванням!")
     
-    while True:
-        try:
-            bot.infinity_polling(timeout=60, long_polling_timeout=60, restart_on_change=True)
-        except Exception as e:
-            print(f"❌ Помилка мережі: {e}")
-            print("🔄 Перезапуск через 10 секунд...")
-            time.sleep(10)
+    try:
+        bot.infinity_polling(timeout=60, long_polling_timeout=60)
+    except Exception as e:
+        print(f"❌ Критична помилка: {e}")
