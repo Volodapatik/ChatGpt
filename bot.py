@@ -5,6 +5,7 @@ import datetime
 import re
 import json
 import pytz
+import time
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ==========================
@@ -20,7 +21,7 @@ SUPPORT_USERNAME = "@uagptpredlozhkabot"
 # Українська часова зона
 UKRAINE_TZ = pytz.timezone('Europe/Kiev')
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+bot = telebot.TeleBot(TELEGRAM_TOKEN, timeout=60)
 user_data = {}
 promo_codes = {
     "TEST1H": {"seconds": 3600, "uses_left": 50},
@@ -454,7 +455,7 @@ def process_promo(message):
     else:
         bot.reply_to(message, "❌ Невірний промокод!")
 
-@bot.message_handler(func=lambda m: m.text == "💳 Кучити преміум")
+@bot.message_handler(func=lambda m: m.text == "💳 Купити преміум")
 def buy_premium(message):
     bot.reply_to(message, "💳 Для придбання преміум підписки зверніться до @uagptpredlozhkabot")
 
@@ -727,5 +728,13 @@ def handle_message(message):
     else:
         bot.reply_to(message, response)
 
-print("🤖 Бот запущено!")
-bot.infinity_polling()
+if __name__ == "__main__":
+    print("✅ Бот запущено з українським часом та покращеним керуванням!")
+    
+    while True:
+        try:
+            bot.infinity_polling(timeout=60, long_polling_timeout=60, restart_on_change=True)
+        except Exception as e:
+            print(f"❌ Помилка мережі: {e}")
+            print("🔄 Перезапуск через 10 секунд...")
+            time.sleep(10)
