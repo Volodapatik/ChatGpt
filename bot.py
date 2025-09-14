@@ -185,13 +185,23 @@ def ask_gemini(user_id, question, context_messages=None):
     
     context_text = "\n".join(context_messages[-6:])
     
+    # Спочатку шукаємо через Google
+    search_performed = False
+    search_results = ""
+    
     if any(word in question.lower() for word in movie_keywords) or any(keyword in context_text.lower() for keyword in movie_keywords):
+        search_results = google_search(question)
+        search_performed = True
+        
         prompt = f"""Ти експерт по фільмах, серіалах та аніме. Відповідай ТОЧНО та КОНКРЕТНО.
         
         Контекст попередньої розмови:
         {context_text}
         
         Поточний запит: {question}
+        
+        Я виконав пошук і знайшов такі результати:
+        {search_results if search_results else "Нічого не знайдено на кіно-сайтах"}
         
         Вкажи ТОЧНУ інформацію у такому форматі:
         🎬 Назва: 
@@ -202,7 +212,9 @@ def ask_gemini(user_id, question, context_messages=None):
         📖 Короткий опис сюжету (2-3 речення):
         
         Якщo це серіал - вкажи кількість сезонів.
-        Якщo точно не знаєш - так і скажи, не вигадуй."""
+        Якщo точно не знаєш - так і скажи, не вигадуй.
+        
+        ДОДАТКОВО: Якщo є посилання з пошуку - обов'язково додай їх в кінці повідомлення!"""
     
     elif any(word in question.lower() for word in code_keywords):
         prompt = f"""Ти експерт-програміст. Відповідай ЧІТКИМ КОДОМ на запит.
@@ -455,7 +467,7 @@ def process_promo(message):
     else:
         bot.reply_to(message, "❌ Невірний промокод!")
 
-@bot.message_handler(func=lambda m: m.text == "💳 Купити преміум")
+@bot.message_handler(func=lambda m: m.text == "💳 Кучити преміум")
 def buy_premium(message):
     bot.reply_to(message, "💳 Для придбання преміум підписки зверніться до @uagptpredlozhkabot")
 
