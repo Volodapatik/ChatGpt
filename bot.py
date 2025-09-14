@@ -21,7 +21,7 @@ SUPPORT_USERNAME = "@uagptpredlozhkabot"
 # Українська часова зона
 UKRAINE_TZ = pytz.timezone('Europe/Kiev')
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN, timeout=60)
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
 user_data = {}
 promo_codes = {
     "TEST1H": {"seconds": 3600, "uses_left": 50},
