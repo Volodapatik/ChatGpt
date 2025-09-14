@@ -60,7 +60,6 @@ def restore_dates(obj):
             if isinstance(value, str):
                 try:
                     if 'T' in value:
-                        # Відновлюємо з урахуванням часового поясу
                         dt = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
                         if dt.tzinfo is None:
                             dt = UKRAINE_TZ.localize(dt)
@@ -99,7 +98,6 @@ def load_data():
                 return
                 
             data = json.loads(content)
-            # Конвертуємо всі ключі в int при завантаженні
             user_data = {int(k): restore_dates(v) for k, v in data.get('user_data', {}).items()}
             promo_codes = data.get('promo_codes', promo_codes)
             
@@ -166,12 +164,12 @@ def google_search(query, search_type="movie"):
     
     url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={GOOGLE_API_KEY}&cx={SEARCH_ENGINE_ID}"
     try:
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, timeout=8)
         data = r.json()
         results = []
         
         if "items" in data:
-            for item in data["items"][:5]:
+            for item in data["items"][:3]:
                 if any(site in item['link'] for site in MOVIE_SITES):
                     results.append(f"{item['title']}\n{item['link']}")
         
@@ -183,78 +181,67 @@ def ask_gemini(user_id, question, context_messages=None):
     if context_messages is None:
         context_messages = []
     
-    context_text = "\n".join(context_messages[-6:])
+    context_text = "\n".join(context_messages[-3:])
     
-    # Спочатку шукаємо через Google
-    search_performed = False
+    question_lower = question.lower()
+    is_movie_query = any(word in question_lower for word in movie_keywords) and not any(word in question_lower for word in code_keywords)
+    is_code_query = any(word in question_lower for word in code_keywords) and not any(word in question_lower for word in movie_keywords)
+    
     search_results = ""
     
-    if any(word in question.lower() for word in movie_keywords) or any(keyword in context_text.lower() for keyword in movie_keywords):
+    if is_movie_query:
         search_results = google_search(question)
-        search_performed = True
-        
         prompt = f"""Ти експерт по фільмах, серіалах та аніме. Відповідай ТОЧНО та КОНКРЕТНО.
         
-        Контекст попередньої розмови:
-        {context_text}
+        Запит: {question}
         
-        Поточний запит: {question}
+        Результати пошуку:
+        {search_results if search_results else "Нічого не знайдено"}
         
-        Я виконав пошук і знайшов такі результати:
-        {search_results if search_results else "Нічого не знайдено на кіно-сайтах"}
-        
-        Вкажи ТОЧНУ інформацію у такому форматі:
+        Вкажи інформацію у форматі:
         🎬 Назва: 
         📅 Рік випуску: 
         🌍 Країна: 
         🎭 Жанр: 
-        ⭐ Рейтинг (якщo відомий): 
-        📖 Короткий опис сюжету (2-3 речення):
+        ⭐ Рейтинг: 
+        📖 Опис сюжету (2-3 речення):
         
-        Якщo це серіал - вкажи кількість сезонів.
-        Якщo точно не знаєш - так і скажи, не вигадуй.
-        
-        ДОДАТКОВО: Якщo є посилання з пошуку - обов'язково додай їх в кінці повідомлення!"""
+        Якщo точно не знаєш - так і скажи."""
     
-    elif any(word in question.lower() for word in code_keywords):
+    elif is_code_query:
         prompt = f"""Ти експерт-програміст. Відповідай ЧІТКИМ КОДОМ на запит.
         
-        Контекст попередньої розмови:
-        {context_text}
-        
-        Поточний запит: {question}
+        Запит: {question}
         
         ВИМОГИ:
         1. Надай ПОВНИЙ робочий код
-        2. Використовуй чітке форматування з ``` 
-        3. Додай короткі коментарі для пояснення
-        4. Переконайся що код працює
-        5. Якщo потрібно - вкажи яку мову програмування використовуєш"""
+        2. Використовуй форматування з ```
+        3. Додай коментарі для пояснення
+        4. Вкажи мову програмування"""
     
     else:
-        prompt = f"""Ти дружній та допоміжний AI-асистент. Відповідай природньo та зрозуміло.
+        prompt = f"""Ти дружній AI-асистент. Відповідай природньo та зрозуміло.
         
-        Контекст попередньої розмови:
-        {context_text}
+        Запит: {question}
         
-        Поточний запит: {question}
-        
-        Вимоги до відповіді:
+        Вимоги:
         1. Будь природнім та дружнім
         2. Відповідай розгорнуто але не занадто довго
-        3. Використовуй емодзі для кращої читабельності
-        4. Якщo питань про фільми/код - відповідай у спеціальному форматі
-        5. Будь корисним та інформативним"""
+        3. Використовуй емодзі
+        4. Будь корисним та інформативним"""
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     data = {
-        "contents": [
-            {"parts": [{"text": prompt}]}
-        ]
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "maxOutputTokens": 1024,
+            "temperature": 0.7
+        }
     }
+    
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=30)
+        response = requests.post(url, headers=headers, json=data, timeout=15)
         result = response.json()
         if "candidates" in result:
             reply = result["candidates"][0]["content"]["parts"][0]["text"]
@@ -303,27 +290,18 @@ def help_text():
         "🎬 <b>Пошук фільмів/серіалів/аніме:</b>\n"
         "• Знаходження за назвою, роком, країною\n"
         "• Пошук за описом сюжету\n"
-        "• Інформація про рейтинг та жанр\n"
-        "• Пошук на українських та міжнародних сайтах\n\n"
+        "• Інформація про рейтинг та жанр\n\n"
         "💻 <b>Генерація коду:</b>\n"
         "• Створення HTML/CSS/JS кодів\n"
         "• Python скрипти та програми\n"
-        "• Зручне копіювання через кнопки\n\n"
+        "• Зручне копіювання\n\n"
         "💬 <b>Звичайне спілкування:</b>\n"
         "• Відповіді на будь-які запитання\n"
-        "• Допомога з різних тем\n"
-        "• Дружній та інформативний стиль\n\n"
+        "• Допомога з різних тем\n\n"
         "💎 <b>Преміум система:</b>\n"
         "• Необмежені запити\n"
-        "• Пріоритетна обробка\n"
-        "• Детальніші відповіді\n\n"
-        "⚙️ <b>Команди:</b>\n"
-        "• /start - Запуск бота\n"
-        "• /profile - Перегляд профілю\n"
-        "• /premium - Інформація про преміум\n"
-        "• /clearduplicates - Очистити дублікати (адмін)\n\n"
-        f"🐞 <b>Знайшли баги чи є ідеї?</b>\n"
-        f"Звертайтеся до техпідтримки: {SUPPORT_USERNAME}"
+        "• Пріоритетна обробка\n\n"
+        f"🐞 Техпідтримка: {SUPPORT_USERNAME}"
     )
 
 load_data()
@@ -343,7 +321,7 @@ def start(message):
             "username": message.from_user.username
         }
         save_data()
-    bot.reply_to(message, "👋 Вітаю! Я твій AI-помічник! Можу:\n• 🎬 Шукати фільми/серіали/аніме\n• 💻 Писати код\n• 💬 Вільно спілкуватись\n\nПросто напиши що потрібно! 😊", reply_markup=main_menu())
+    bot.reply_to(message, "👋 Вітаю! Я твій AI-помічник! Можу:\n• 🎬 Шукати фільми/серіали/аніме\n• 💻 Писати код\n• 💬 Свободно спілкуватись\n\nПросто напиши що потрібно! 😊", reply_markup=main_menu())
 
 @bot.message_handler(commands=["profile"])
 def profile_command(message):
@@ -467,7 +445,7 @@ def process_promo(message):
     else:
         bot.reply_to(message, "❌ Невірний промокод!")
 
-@bot.message_handler(func=lambda m: m.text == "💳 Кучити преміум")
+@bot.message_handler(func=lambda m: m.text == "💳 Купити преміум")
 def buy_premium(message):
     bot.reply_to(message, "💳 Для придбання преміум підписки зверніться до @uagptpredlozhkabot")
 
@@ -552,7 +530,24 @@ def process_add_premium(message):
         user_id = int(message.text.strip())
         user_data[user_id]["premium"] = {"active": True, "until": None}
         save_data()
+        
+        # Повідомлення адміну
         bot.reply_to(message, f"✅ Безстроковий преміум надано користувачу {user_id}!")
+        
+        # Повідомлення користувачу (якщо бот знайомий з ним)
+        try:
+            user_info = f"@{user_data[user_id].get('username', 'unknown')}" if user_id in user_data else str(user_id)
+            bot.send_message(user_id, 
+                f"🎉 Вітаю! Адміністратор надав вам безстроковий преміум доступ! ♾️\n\n"
+                f"Тепер ви можете:\n"
+                f"• Робити необмежену кількість запитів\n"
+                f"• Отримувати пріоритетну обробку\n"
+                f"• Користуватись усіма перевагами преміуму\n\n"
+                f"Щоб перевірити статус: /profile"
+            )
+        except:
+            pass  # Користувач не писав боту
+        
     except:
         bot.reply_to(message, "❌ Помилка! Перевірте ID.")
 
@@ -586,7 +581,30 @@ def process_timed_premium(message):
         }
         save_data()
         
-        bot.reply_to(message, f"✅ Преміум надано користувачу {user_id} до {until_time.astimezone(UKRAINE_TZ).strftime('%d.%m.%Y %H:%M')}!")
+        # Повідомлення адміну
+        time_duration = format_time(seconds)
+        bot.reply_to(message, 
+            f"✅ Преміум надано користувачу {user_id}!\n"
+            f"⏰ Тривалість: {time_duration}\n"
+            f"📅 До: {until_time.astimezone(UKRAINE_TZ).strftime('%d.%m.%Y %H:%M')}"
+        )
+        
+        # Повідомлення користувачу
+        try:
+            user_info = f"@{user_data[user_id].get('username', 'unknown')}" if user_id in user_data else str(user_id)
+            bot.send_message(user_id,
+                f"🎉 Вітаю! Адміністратор надав вам преміум доступ!\n\n"
+                f"⏰ Тривалість: {time_duration}\n"
+                f"📅 Діє до: {until_time.astimezone(UKRAINE_TZ).strftime('%d.%m.%Y %H:%M')}\n\n"
+                f"Тепер ви можете:\n"
+                f"• Робити необмежену кількість запитів\n"
+                f"• Отримувати пріоритетну обробку\n"
+                f"• Користуватись усіма перевагами преміуму\n\n"
+                f"Щоб перевірити статус: /profile"
+            )
+        except:
+            pass  # Користувач не писав боту
+        
     except:
         bot.reply_to(message, "❌ Помилка! Перевірте введені дані.")
 
@@ -659,7 +677,6 @@ def copy_code(call):
 def handle_message(message):
     user_id = message.from_user.id
     
-    # Переконуємося що користувач є в базі
     if user_id not in user_data:
         user_data[user_id] = {
             "used": 0,
@@ -676,7 +693,6 @@ def handle_message(message):
     user = user_data[user_id]
     today = get_ukraine_time().date()
     
-    # Перевіряємо чи потрібно скинути лічильник
     if isinstance(user["reset"], str):
         reset_date = datetime.date.fromisoformat(user["reset"])
     else:
@@ -687,7 +703,6 @@ def handle_message(message):
         user["reset"] = today.isoformat()
         save_data()
     
-    # Перевіряємо чи не закінчився преміум
     if user["premium"]["active"] and user["premium"]["until"] is not None:
         if isinstance(user["premium"]["until"], str):
             until_date = datetime.datetime.fromisoformat(user["premium"]["until"])
@@ -700,7 +715,6 @@ def handle_message(message):
             user["premium"] = {"active": False, "until": None}
             save_data()
     
-    # Перевіряємо ліміти
     is_premium = user["premium"]["active"] or user_id == ADMIN_ID
     if not is_premium and user["used"] >= FREE_LIMIT:
         if not user["free_used"]:
@@ -711,7 +725,6 @@ def handle_message(message):
             bot.reply_to(message, f"❌ Ліміт вичерпано! Спробуйте завтра або отримайте преміум 💎", reply_markup=premium_menu_keyboard())
         return
     
-    # Обробляємо запит
     user["used"] += 1
     user["history"].append(message.text)
     if len(user["history"]) > 10:
@@ -719,10 +732,9 @@ def handle_message(message):
     
     save_data()
     
-    # Визначаємо тип запиту
     question = message.text.lower()
-    is_movie_query = any(word in question for word in movie_keywords)
-    is_code_query = any(word in question for word in code_keywords)
+    is_movie_query = any(word in question for word in movie_keywords) and not any(word in question for word in code_keywords)
+    is_code_query = any(word in question for word in code_keywords) and not any(word in question for word in movie_keywords)
     
     if is_movie_query:
         user["last_movie_query"] = message.text
@@ -730,7 +742,6 @@ def handle_message(message):
         if "🔍 Нічого не знайдено" not in search_results:
             bot.reply_to(message, f"🔍 <b>Результати пошуку:</b>\n\n{search_results}\n\n📝 <b>А ось детальна інформація:</b>", parse_mode="HTML")
     
-    # Відправляємо запит до AI
     bot.send_chat_action(message.chat.id, "typing")
     response = ask_gemini(user_id, message.text, user["history"])
     
