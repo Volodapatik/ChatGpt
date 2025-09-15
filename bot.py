@@ -34,6 +34,9 @@ promo_codes = {
     "VIP30D": {"seconds": 2592000, "uses_left": 20}
 }
 
+# Стан бота
+BOT_ENABLED = True
+
 MOVIE_SITES = [
     "imdb.com", "myanimelist.net", "anidb.net", "anime-planet.com",
     "anilist.co", "animego.org", "shikimori.one", "anime-news-network.com",
@@ -83,7 +86,8 @@ def save_data():
     try:
         data_to_save = {
             'user_data': convert_dates(user_data),
-            'promo_codes': promo_codes
+            'promo_codes': promo_codes,
+            'bot_enabled': BOT_ENABLED
         }
         with open('bot_data.json', 'w', encoding='utf-8') as f:
             json.dump(data_to_save, f, ensure_ascii=False, indent=2)
@@ -108,7 +112,7 @@ signal.signal(signal.SIGTERM, lambda s, f: exit_handler())
 atexit.register(exit_handler)
 
 def load_data():
-    global user_data, promo_codes
+    global user_data, promo_codes, BOT_ENABLED
     try:
         if not os.path.exists('bot_data.json'):
             return
@@ -121,6 +125,7 @@ def load_data():
             data = json.loads(content)
             user_data = {int(k): restore_dates(v) for k, v in data.get('user_data', {}).items()}
             promo_codes = data.get('promo_codes', promo_codes)
+            BOT_ENABLED = data.get('bot_enabled', True)
             
     except json.JSONDecodeError:
         try:
@@ -129,6 +134,21 @@ def load_data():
             pass
     except Exception as e:
         print(f"❌ Помилка завантаження: {e}")
+
+def check_bot_enabled(message):
+    """Перевіряє, чи увімкнений бот для користувача"""
+    if not BOT_ENABLED and message.from_user.id != ADMIN_ID:
+        maintenance_text = (
+            "🔧 **Технічні роботи**\n"
+            "Вибачте за тимчасові незручності! \n"
+            "Бот тимчасово недоступний через оновлення.\n\n"
+            "🕐 **Приблизний час:** 1-2 години\n"
+            "✨ **Що нового:** Покращена стабільність роботи\n\n"
+            "Звертайтеся до @uagptpredlozhkabot для питань"
+        )
+        bot.reply_to(message, maintenance_text, parse_mode="Markdown")
+        return False
+    return True
 
 def parse_time_input(time_str):
     time_str = time_str.lower().strip()
@@ -293,7 +313,18 @@ def admin_keyboard():
     kb.add(KeyboardButton("⏰ Преміум на час"))
     kb.add(KeyboardButton("🗑️ Видалити користувача"))
     kb.add(KeyboardButton("📊 Статистика"))
+    kb.add(KeyboardButton("⚙️ Керування ботом"))
     kb.add(KeyboardButton("🔙 Головне меню"))
+    return kb
+
+def bot_management_keyboard():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    if BOT_ENABLED:
+        kb.add(KeyboardButton("🔴 Вимкнути бота"))
+    else:
+        kb.add(KeyboardButton("🟢 Увімкнути бота"))
+    kb.add(KeyboardButton("📊 Статус бота"))
+    kb.add(KeyboardButton("🔙 До адмін панелі"))
     return kb
 
 def main_menu():
@@ -329,6 +360,8 @@ load_data()
 
 @bot.message_handler(commands=["start"])
 def start(message):
+    if not check_bot_enabled(message):
+        return
     user_id = message.from_user.id
     if user_id not in user_data:
         user_data[user_id] = {
@@ -346,10 +379,14 @@ def start(message):
 
 @bot.message_handler(commands=["profile"])
 def profile_command(message):
+    if not check_bot_enabled(message):
+        return
     profile(message)
 
 @bot.message_handler(func=lambda m: m.text == "📊 Профіль")
 def profile(message):
+    if not check_bot_enabled(message):
+        return
     user_id = message.from_user.id
     if user_id not in user_data:
         start(message)
@@ -404,10 +441,14 @@ def profile(message):
 
 @bot.message_handler(commands=["premium"])
 def premium_command(message):
+    if not check_bot_enabled(message):
+        return
     premium_info(message)
 
 @bot.message_handler(func=lambda m: m.text == "💎 Преміум")
 def premium_info(message):
+    if not check_bot_enabled(message):
+        return
     text = (
         "💎 <b>Преміум підписка:</b>\n\n"
         "✅ <b>Переваги:</b>\n"
@@ -419,67 +460,117 @@ def premium_info(message):
         "• Введіть промокод\n"
         "• Придбайте підписку\n\n"
         "💳 <b>Ціни:</b>\n"
-        "• 1 день - 50 грн\n"
-        "• 7 днів - 250 грн\n"
-        "• 30 днів - 800 грн\n\n"
+        "• 1 день - 10 грн\n"
+        "• 7 днів - 50 грн\n"
+        "• 30 днів - 100 грн\n\n"
         "📱 Для придбання звертайтеся до @uagptpredlozhkabot"
     )
     bot.reply_to(message, text, parse_mode="HTML", reply_markup=premium_menu_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "🎫 Ввести промокод")
 def enter_promo(message):
+    if not check_bot_enabled(message):
+        return
     bot.reply_to(message, "🔑 Введіть ваш промокод:")
     bot.register_next_step_handler(message, process_promo)
 
 def process_promo(message):
+    if not check_bot_enabled(message):
+        return
     user_id = message.from_user.id
     promo = message.text.strip().upper()
     
     if promo in promo_codes:
         code_data = promo_codes[promo]
         if code_data["uses_left"] > 0:
-            if user_data[user_id]["premium"]["active"]:
-                current_until = user_data[user_id]["premium"]["until"]
-                if current_until is None:
-                    bot.reply_to(message, "❌ У вас вже є безстроковий преміум!")
-                    return
-                
-                if isinstance(current_until, str):
-                    current_until = datetime.datetime.fromisoformat(current_until)
-                    if current_until.tzinfo is None:
-                        current_until = UKRAINE_TZ.localize(current_until)
-                
-                new_until = current_until + datetime.timedelta(seconds=code_data["seconds"])
+            # Ось виправлення для безстрокового преміуму
+            if code_data["seconds"] == 0:  # Якщо 0 секунд - назавжди
+                user_data[user_id]["premium"] = {
+                    "active": True,
+                    "until": None  # None означає назавжди
+                }
             else:
-                new_until = get_ukraine_time() + datetime.timedelta(seconds=code_data["seconds"])
+                if user_data[user_id]["premium"]["active"]:
+                    current_until = user_data[user_id]["premium"]["until"]
+                    if current_until is None:
+                        bot.reply_to(message, "❌ У вас вже є безстроковий преміум!")
+                        return
+                    
+                    if isinstance(current_until, str):
+                        current_until = datetime.datetime.fromisoformat(current_until)
+                        if current_until.tzinfo is None:
+                            current_until = UKRAINE_TZ.localize(current_until)
+                    
+                    new_until = current_until + datetime.timedelta(seconds=code_data["seconds"])
+                else:
+                    new_until = get_ukraine_time() + datetime.timedelta(seconds=code_data["seconds"])
+                
+                user_data[user_id]["premium"] = {
+                    "active": True,
+                    "until": new_until
+                }
             
-            user_data[user_id]["premium"] = {
-                "active": True,
-                "until": new_until
-            }
             code_data["uses_left"] -= 1
             save_data()
             
-            bot.reply_to(message, f"✅ Преміум активовано до {new_until.astimezone(UKRAINE_TZ).strftime('%d.%m.%Y %H:%M')}!")
+            if code_data["seconds"] == 0:
+                bot.reply_to(message, "✅ Безстроковий преміум активовано! ♾️")
+            else:
+                bot.reply_to(message, f"✅ Преміум активовано до {new_until.astimezone(UKRAINE_TZ).strftime('%d.%m.%Y %H:%M')}!")
         else:
             bot.reply_to(message, "❌ Промокод вичерпано!")
     else:
         bot.reply_to(message, "❌ Невірний промокод!")
 
-@bot.message_handler(func=lambda m: m.text == "💳 Кучити преміум")
+@bot.message_handler(func=lambda m: m.text == "💳 Купити преміум")
 def buy_premium(message):
+    if not check_bot_enabled(message):
+        return
     bot.reply_to(message, "💳 Для придбання преміум підписки зверніться до @uagptpredlozhkabot")
 
 @bot.message_handler(func=lambda m: m.text == "🆘 Допомога")
 def help_command(message):
+    if not check_bot_enabled(message):
+        return
     bot.reply_to(message, help_text(), parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text == "⚙️ Адмін панель" and m.from_user.id == ADMIN_ID)
 def admin_panel(message):
+    if not check_bot_enabled(message):
+        return
+    bot.reply_to(message, "⚙️ <b>Адмін панель:</b>", parse_mode="HTML", reply_markup=admin_keyboard())
+
+@bot.message_handler(func=lambda m: m.text == "⚙️ Керування ботом" and m.from_user.id == ADMIN_ID)
+def bot_management(message):
+    bot.reply_to(message, "🤖 <b>Керування ботом:</b>", parse_mode="HTML", reply_markup=bot_management_keyboard())
+
+@bot.message_handler(func=lambda m: m.text == "🔴 Вимкнути бота" and m.from_user.id == ADMIN_ID)
+def disable_bot(message):
+    global BOT_ENABLED
+    BOT_ENABLED = False
+    save_data()
+    bot.reply_to(message, "🔴 Бот вимкнений для всіх користувачів крім адміністратора!", reply_markup=bot_management_keyboard())
+
+@bot.message_handler(func=lambda m: m.text == "🟢 Увімкнути бота" and m.from_user.id == ADMIN_ID)
+def enable_bot(message):
+    global BOT_ENABLED
+    BOT_ENABLED = True
+    save_data()
+    bot.reply_to(message, "🟢 Бот увімкнений для всіх користувачів!", reply_markup=bot_management_keyboard())
+
+@bot.message_handler(func=lambda m: m.text == "📊 Статус бота" and m.from_user.id == ADMIN_ID)
+def bot_status(message):
+    status = "🟢 Увімкнений" if BOT_ENABLED else "🔴 Вимкнений"
+    bot.reply_to(message, f"📊 <b>Статус бота:</b> {status}", parse_mode="HTML", reply_markup=bot_management_keyboard())
+
+@bot.message_handler(func=lambda m: m.text == "🔙 До адмін панелі" and m.from_user.id == ADMIN_ID)
+def back_to_admin(message):
     bot.reply_to(message, "⚙️ <b>Адмін панель:</b>", parse_mode="HTML", reply_markup=admin_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Головне меню")
 def back_to_main(message):
+    if not check_bot_enabled(message):
+        return
     bot.reply_to(message, "🏠 <b>Головне меню:</b>", parse_mode="HTML", reply_markup=main_menu())
 
 @bot.message_handler(func=lambda m: m.text == "👥 Список користувачів" and m.from_user.id == ADMIN_ID)
@@ -696,6 +787,8 @@ def copy_code(call):
 
 @bot.message_handler(func=lambda m: True)
 def handle_message(message):
+    if not check_bot_enabled(message):
+        return
     user_id = message.from_user.id
     
     if user_id not in user_data:
