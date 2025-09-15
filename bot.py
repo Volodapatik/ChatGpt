@@ -34,6 +34,21 @@ promo_codes = {
 }
 BOT_ENABLED = True
 
+# Списки ключових слів
+MOVIE_SITES = [
+    "imdb.com", "myanimelist.net", "anidb.net", "anime-planet.com",
+    "anilist.co", "animego.org", "shikimori.one", "anime-news-network.com",
+    "kinoukr.com", "film.ua", "kino-teatr.ua", "novyny.live", "telekritika.ua"
+]
+
+movie_keywords = ["фільм", "серіал", "аніме", "мультфільм", "movie", "anime", "series", "кіно", "фильм", "сюжет", "сюжету", "опис"]
+code_keywords = ["код", "html", "css", "js", "javascript", "python", "створи", "скрипт", "програма", "create", "program"]
+
+# Українська часова зона
+UKRAINE_TZ = pytz.timezone('Europe/Kiev')
+
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
 # Підключення до MongoDB
 try:
     client = pymongo.MongoClient(MONGODB_URI, tls=True, tlsAllowInvalidCertificates=True)
@@ -48,11 +63,6 @@ except Exception as e:
     users_collection = None
     promo_collection = None
     bot_settings_collection = None
-
-# Українська часова зона
-UKRAINE_TZ = pytz.timezone('Europe/Kiev')
-
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 # Завантаження даних з MongoDB
 def load_data():
@@ -382,16 +392,6 @@ def help_text():
         f"🐞 Техпідтримка: {SUPPORT_USERNAME}"
     )
 
-# Списки ключових слів
-MOVIE_SITES = [
-    "imdb.com", "myanimelist.net", "anidb.net", "anime-planet.com",
-    "anilist.co", "animego.org", "shikimori.one", "anime-news-network.com",
-    "kinoukr.com", "film.ua", "kino-teatr.ua", "novyny.live", "telekritika.ua"
-]
-
-movie_keywords = ["фільм", "серіал", "аніме", "мультфільм", "movie", "anime", "series", "кіно", "фильм", "сюжет", "сюжету", "опис"]
-code_keywords = ["код", "html", "css", "js", "javascript", "python", "створи", "скрипт", "програма", "create", "program"]
-
 # Завантажуємо дані при старті
 load_data()
 
@@ -412,7 +412,11 @@ def start(message):
             "last_code": None,
             "username": message.from_user.username
         }
-        save_data()
+    else:
+        # ОНОВЛЮЄМО username якщо користувач вже існує
+        user_data[user_id]["username"] = message.from_user.username
+    
+    save_data()
     bot.reply_to(message, "👋 Вітаю! Я твій AI-помічник! Можу:\n• 🎬 Шукати фільми/серіали/аніме\n• 💻 Писати код\n• 💬 Вільно спілкуватись\n\nПросто напиши що потрібно! 😊", reply_markup=main_menu())
 
 @bot.message_handler(commands=["profile"])
@@ -462,12 +466,18 @@ def profile(message):
                 save_data()
     
     role = "👑 Адміністратор" if user_id == ADMIN_ID else ("💎 Преміум" if user["premium"]["active"] else "👤 Користувач")
+    username = user.get('username', 'unknown')
+    if username is None or username == "user_" + str(user_id):
+        username = "немає"
+    else:
+        username = "@" + username
+    
     limit_info = "♾️ Необмежено" if (user["premium"]["active"] or user_id == ADMIN_ID) else f"{user['used']}/{FREE_LIMIT}"
     
     profile_text = (
         f"📊 <b>Профіль:</b>\n\n"
         f"🆔 ID: {user_id}\n"
-        f"👤 Ім'я: @{user.get('username', 'unknown')}\n"
+        f"👤 Ім'я: {username}\n"
         f"🎭 Роль: {role}\n"
         f"💎 Преміум: {premium_status}\n"
         f"💬 Використано сьогодні: {user['used']}\n"
@@ -615,7 +625,12 @@ def user_list(message):
     users_text = "👥 <b>Список користувачів:</b>\n\n"
     for uid, data in list(user_data.items())[:50]:
         premium_status = "✅" if data["premium"]["active"] else "❌"
-        users_text += f"ID: {uid} | @{data.get('username', 'unknown')} | Преміум: {premium_status} | Використано: {data['used']}\n"
+        username = data.get('username', 'unknown')
+        if username is None or username == "user_" + str(uid):
+            username = "немає"
+        else:
+            username = "@" + username
+        users_text += f"ID: {uid} | {username} | Преміум: {premium_status} | Використано: {data['used']}\n"
     
     users_text += f"\n📊 Всього користувачів: {len(user_data)}"
     bot.reply_to(message, users_text, parse_mode="HTML")
@@ -677,6 +692,14 @@ def process_add_premium(message):
     
     try:
         user_id = int(message.text.strip())
+        username = "user_" + str(user_id)
+        
+        # Спроба отримати username з повідомлення
+        if message.forward_from:
+            username = message.forward_from.username or username
+        elif message.reply_to_message and message.reply_to_message.from_user:
+            username = message.reply_to_message.from_user.username or username
+        
         user_data[user_id] = {
             "_id": user_id,
             "used": 0,
@@ -686,7 +709,7 @@ def process_add_premium(message):
             "free_used": False,
             "last_movie_query": None,
             "last_code": None,
-            "username": f"user_{user_id}"
+            "username": username
         }
         save_data()
         
@@ -861,6 +884,10 @@ def handle_message(message):
             "last_code": None,
             "username": message.from_user.username
         }
+        save_data()
+    else:
+        # ОНОВЛЮЄМО username при кожному повідомленні
+        user_data[user_id]["username"] = message.from_user.username
         save_data()
     
     user = user_data[user_id]
