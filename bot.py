@@ -24,6 +24,18 @@ SUPPORT_USERNAME = "@uagptpredlozhkabot"
 AUTOSAVE_INTERVAL = 300  # Автозбереження кожні 5 хвилин (300 секунд)
 # ==========================
 
+# Додайте ці рядки ПЕРЕД викликом load_data()
+user_data = {}
+promo_codes = {
+    "TEST1H": {"seconds": 3600, "uses_left": 50},
+    "WELCOME1D": {"seconds": 86400, "uses_left": 100},
+    "PREMIUM7D": {"seconds": 604800, "uses_left": 30},
+    "VIP30D": {"seconds": 2592000, "uses_left": 20}
+}
+BOT_ENABLED = True
+
+# Завантажуємо дані при старті
+load_data()
 # Підключення до MongoDB
 client = pymongo.MongoClient(MONGODB_URI, tls=True, tlsAllowInvalidCertificates=True)
 db = client["telegram_bot"]
