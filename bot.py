@@ -25,7 +25,7 @@ AUTOSAVE_INTERVAL = 300  # Автозбереження кожні 5 хвили�
 # ==========================
 
 # Підключення до MongoDB
-client = pymongo.MongoClient(MONGODB_URI)
+client = pymongo.MongoClient(MONGODB_URI, tls=True, tlsAllowInvalidCertificates=True)
 db = client["telegram_bot"]
 users_collection = db["users"]
 promo_collection = db["promo_codes"]
