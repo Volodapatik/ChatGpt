@@ -24,7 +24,7 @@ SUPPORT_USERNAME = "@uagptpredlozhkabot"
 AUTOSAVE_INTERVAL = 300  # Автозбереження кожні 5 хвилин (300 секунд)
 # ==========================
 
-# Додайте ці рядки ПЕРЕД викликом load_data()
+# Глобальні змінні (ініціалізуємо спочатку)
 user_data = {}
 promo_codes = {
     "TEST1H": {"seconds": 3600, "uses_left": 50},
@@ -34,14 +34,20 @@ promo_codes = {
 }
 BOT_ENABLED = True
 
-# Завантажуємо дані при старті
-load_data()
 # Підключення до MongoDB
-client = pymongo.MongoClient(MONGODB_URI, tls=True, tlsAllowInvalidCertificates=True)
-db = client["telegram_bot"]
-users_collection = db["users"]
-promo_collection = db["promo_codes"]
-bot_settings_collection = db["bot_settings"]
+try:
+    client = pymongo.MongoClient(MONGODB_URI, tls=True, tlsAllowInvalidCertificates=True)
+    db = client["telegram_bot"]
+    users_collection = db["users"]
+    promo_collection = db["promo_codes"]
+    bot_settings_collection = db["bot_settings"]
+    print("✅ Підключено до MongoDB")
+except Exception as e:
+    print(f"❌ Помилка підключення до MongoDB: {e}")
+    # Створюємо заглушки для колекцій
+    users_collection = None
+    promo_collection = None
+    bot_settings_collection = None
 
 # Українська часова зона
 UKRAINE_TZ = pytz.timezone('Europe/Kiev')
@@ -52,44 +58,49 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 def load_data():
     global user_data, promo_codes, BOT_ENABLED
     
-    # Завантаження користувачів
-    user_data = {}
-    for user in users_collection.find():
-        user_data[user['_id']] = user
-        # Конвертація рядків дат назад у datetime об'єкти
-        if 'reset' in user and isinstance(user['reset'], str):
-            user_data[user['_id']]['reset'] = datetime.date.fromisoformat(user['reset'])
-        if 'premium' in user and 'until' in user['premium'] and user['premium']['until'] and isinstance(user['premium']['until'], str):
-            dt = datetime.datetime.fromisoformat(user['premium']['until'].replace('Z', '+00:00'))
-            if dt.tzinfo is None:
-                dt = UKRAINE_TZ.localize(dt)
-            user_data[user['_id']]['premium']['until'] = dt
+    if users_collection is None:
+        print("❌ MongoDB не підключено, пропускаємо завантаження даних")
+        return
     
-    # Завантаження промокодів
-    promo_codes = {}
-    promo_doc = promo_collection.find_one({"_id": "active_promos"})
-    if promo_doc:
-        promo_codes = promo_doc.get('codes', {})
-    
-    # Завантаження налаштувань бота
-    settings = bot_settings_collection.find_one({"_id": "main_settings"})
-    if settings:
-        BOT_ENABLED = settings.get('enabled', True)
-    else:
-        BOT_ENABLED = True
-        bot_settings_collection.insert_one({"_id": "main_settings", "enabled": True})
-
-# Стан бота
-BOT_ENABLED = True
-
-MOVIE_SITES = [
-    "imdb.com", "myanimelist.net", "anidb.net", "anime-planet.com",
-    "anilist.co", "animego.org", "shikimori.one", "anime-news-network.com",
-    "kinoukr.com", "film.ua", "kino-teatr.ua", "novyny.live", "telekritika.ua"
-]
-
-movie_keywords = ["фільм", "серіал", "аніме", "мультфільм", "movie", "anime", "series", "кіно", "фильм", "сюжет", "сюжету", "опис"]
-code_keywords = ["код", "html", "css", "js", "javascript", "python", "створи", "скрипт", "програма", "create", "program"]
+    try:
+        # Завантаження користувачів
+        user_data = {}
+        for user in users_collection.find():
+            user_data[user['_id']] = user
+            # Конвертація рядків дат назад у datetime об'єкти
+            if 'reset' in user and isinstance(user['reset'], str):
+                user_data[user['_id']]['reset'] = datetime.date.fromisoformat(user['reset'])
+            if 'premium' in user and 'until' in user['premium'] and user['premium']['until'] and isinstance(user['premium']['until'], str):
+                dt = datetime.datetime.fromisoformat(user['premium']['until'].replace('Z', '+00:00'))
+                if dt.tzinfo is None:
+                    dt = UKRAINE_TZ.localize(dt)
+                user_data[user['_id']]['premium']['until'] = dt
+        
+        # Завантаження промокодів
+        promo_doc = promo_collection.find_one({"_id": "active_promos"})
+        if promo_doc:
+            promo_codes = promo_doc.get('codes', {})
+        else:
+            # Якщо немає промокодів в базі, зберігаємо дефолтні
+            promo_collection.update_one(
+                {"_id": "active_promos"},
+                {"$set": {"codes": promo_codes}},
+                upsert=True
+            )
+        
+        # Завантаження налаштувань бота
+        settings = bot_settings_collection.find_one({"_id": "main_settings"})
+        if settings:
+            BOT_ENABLED = settings.get('enabled', True)
+        else:
+            BOT_ENABLED = True
+            bot_settings_collection.insert_one({"_id": "main_settings", "enabled": True})
+            
+        print(f"✅ Завантажено {len(user_data)} користувачів з MongoDB")
+        print(f"✅ Завантажено {len(promo_codes)} промокодів")
+        
+    except Exception as e:
+        print(f"❌ Помилка завантаження даних: {e}")
 
 def get_ukraine_time():
     """Повертає поточний час України"""
@@ -97,6 +108,10 @@ def get_ukraine_time():
 
 def save_data():
     try:
+        if users_collection is None:
+            print("❌ MongoDB не підключено, пропускаємо збереження")
+            return
+            
         # Збереження користувачів
         for user_id, user_data_item in user_data.items():
             # Конвертація datetime об'єктів у рядки для MongoDB
@@ -367,10 +382,18 @@ def help_text():
         f"🐞 Техпідтримка: {SUPPORT_USERNAME}"
     )
 
+# Списки ключових слів
+MOVIE_SITES = [
+    "imdb.com", "myanimelist.net", "anidb.net", "anime-planet.com",
+    "anilist.co", "animego.org", "shikimori.one", "anime-news-network.com",
+    "kinoukr.com", "film.ua", "kino-teatr.ua", "novyny.live", "telekritika.ua"
+]
+
+movie_keywords = ["фільм", "серіал", "аніме", "мультфільм", "movie", "anime", "series", "кіно", "фильм", "сюжет", "сюжету", "опис"]
+code_keywords = ["код", "html", "css", "js", "javascript", "python", "створи", "скрипт", "програма", "create", "program"]
+
 # Завантажуємо дані при старті
 load_data()
-print(f"✅ Завантажено {len(user_data)} користувачів з MongoDB")
-print(f"✅ Завантажено {len(promo_codes)} промокодів")
 
 @bot.message_handler(commands=["start"])
 def start(message):
@@ -766,7 +789,8 @@ def process_delete_user(message):
         user_id = int(message.text.strip())
         if user_id in user_data:
             del user_data[user_id]
-            users_collection.delete_one({"_id": user_id})
+            if users_collection:
+                users_collection.delete_one({"_id": user_id})
             save_data()
             bot.reply_to(message, f"✅ Користувача {user_id} видалено!")
         else:
