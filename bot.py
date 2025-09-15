@@ -6,6 +6,9 @@ import re
 import json
 import pytz
 import time
+import signal
+import atexit
+import threading
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ==========================
@@ -16,6 +19,7 @@ SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 1637885523))
 FREE_LIMIT = 30
 SUPPORT_USERNAME = "@uagptpredlozhkabot"
+AUTOSAVE_INTERVAL = 300  # Автозбереження кожні 5 хвилин (300 секунд)
 # ==========================
 
 # Українська часова зона
@@ -83,8 +87,25 @@ def save_data():
         }
         with open('bot_data.json', 'w', encoding='utf-8') as f:
             json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+        print(f"✅ Дані збережено о {get_ukraine_time().strftime('%H:%M:%S')}")
     except Exception as e:
         print(f"❌ Помилка збереження даних: {e}")
+
+def auto_save():
+    """Функція для регулярного автозбереження"""
+    save_data()
+    # Перезапускаємо таймер
+    threading.Timer(AUTOSAVE_INTERVAL, auto_save).start()
+
+def exit_handler():
+    """Функція, яка викликається при завершенні роботи"""
+    print("\n🛑 Завершення роботи... Зберігаємо дані.")
+    save_data()
+
+# Додаємо обробник для сигналів завершення
+signal.signal(signal.SIGINT, lambda s, f: exit_handler())
+signal.signal(signal.SIGTERM, lambda s, f: exit_handler())
+atexit.register(exit_handler)
 
 def load_data():
     global user_data, promo_codes
@@ -445,7 +466,7 @@ def process_promo(message):
     else:
         bot.reply_to(message, "❌ Невірний промокод!")
 
-@bot.message_handler(func=lambda m: m.text == "💳 Купити преміум")
+@bot.message_handler(func=lambda m: m.text == "💳 Кучити преміум")
 def buy_premium(message):
     bot.reply_to(message, "💳 Для придбання преміум підписки зверніться до @uagptpredlozhkabot")
 
@@ -754,7 +775,11 @@ def handle_message(message):
 if __name__ == "__main__":
     print("✅ Бот запущено з українським часом та покращеним керуванням!")
     
+    # Запускаємо автозбереження
+    threading.Timer(AUTOSAVE_INTERVAL, auto_save).start()
+    
     try:
         bot.infinity_polling(timeout=60, long_polling_timeout=60)
     except Exception as e:
         print(f"❌ Критична помилка: {e}")
+        exit_handler()  # Зберігаємо дані навіть при критичній помилці
