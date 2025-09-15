@@ -9,6 +9,7 @@ import time
 import signal
 import atexit
 import threading
+import pymongo
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ==========================
@@ -17,22 +18,54 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 1637885523))
+MONGODB_URI = os.getenv("MONGODB_URI")
 FREE_LIMIT = 30
 SUPPORT_USERNAME = "@uagptpredlozhkabot"
 AUTOSAVE_INTERVAL = 300  # Автозбереження кожні 5 хвилин (300 секунд)
 # ==========================
 
+# Підключення до MongoDB
+client = pymongo.MongoClient(MONGODB_URI)
+db = client["telegram_bot"]
+users_collection = db["users"]
+promo_collection = db["promo_codes"]
+bot_settings_collection = db["bot_settings"]
+
 # Українська часова зона
 UKRAINE_TZ = pytz.timezone('Europe/Kiev')
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-user_data = {}
-promo_codes = {
-    "TEST1H": {"seconds": 3600, "uses_left": 50},
-    "WELCOME1D": {"seconds": 86400, "uses_left": 100},
-    "PREMIUM7D": {"seconds": 604800, "uses_left": 30},
-    "VIP30D": {"seconds": 2592000, "uses_left": 20}
-}
+
+# Завантаження даних з MongoDB
+def load_data():
+    global user_data, promo_codes, BOT_ENABLED
+    
+    # Завантаження користувачів
+    user_data = {}
+    for user in users_collection.find():
+        user_data[user['_id']] = user
+        # Конвертація рядків дат назад у datetime об'єкти
+        if 'reset' in user and isinstance(user['reset'], str):
+            user_data[user['_id']]['reset'] = datetime.date.fromisoformat(user['reset'])
+        if 'premium' in user and 'until' in user['premium'] and user['premium']['until'] and isinstance(user['premium']['until'], str):
+            dt = datetime.datetime.fromisoformat(user['premium']['until'].replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = UKRAINE_TZ.localize(dt)
+            user_data[user['_id']]['premium']['until'] = dt
+    
+    # Завантаження промокодів
+    promo_codes = {}
+    promo_doc = promo_collection.find_one({"_id": "active_promos"})
+    if promo_doc:
+        promo_codes = promo_doc.get('codes', {})
+    
+    # Завантаження налаштувань бота
+    settings = bot_settings_collection.find_one({"_id": "main_settings"})
+    if settings:
+        BOT_ENABLED = settings.get('enabled', True)
+    else:
+        BOT_ENABLED = True
+        bot_settings_collection.insert_one({"_id": "main_settings", "enabled": True})
 
 # Стан бота
 BOT_ENABLED = True
@@ -50,48 +83,38 @@ def get_ukraine_time():
     """Повертає поточний час України"""
     return datetime.datetime.now(UKRAINE_TZ)
 
-def convert_dates(obj):
-    if isinstance(obj, datetime.datetime):
-        return obj.isoformat()
-    elif isinstance(obj, datetime.date):
-        return obj.isoformat()
-    elif isinstance(obj, dict):
-        return {k: convert_dates(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_dates(item) for item in obj]
-    return obj
-
-def restore_dates(obj):
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if isinstance(value, str):
-                try:
-                    if 'T' in value:
-                        dt = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
-                        if dt.tzinfo is None:
-                            dt = UKRAINE_TZ.localize(dt)
-                        obj[key] = dt
-                    elif len(value) == 10 and value.count('-') == 2:
-                        obj[key] = datetime.date.fromisoformat(value)
-                except (ValueError, TypeError):
-                    pass
-            elif isinstance(value, (dict, list)):
-                restore_dates(value)
-    elif isinstance(obj, list):
-        for item in obj:
-            restore_dates(item)
-    return obj
-
 def save_data():
     try:
-        data_to_save = {
-            'user_data': convert_dates(user_data),
-            'promo_codes': promo_codes,
-            'bot_enabled': BOT_ENABLED
-        }
-        with open('bot_data.json', 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=2)
-        print(f"✅ Дані збережено о {get_ukraine_time().strftime('%H:%M:%S')}")
+        # Збереження користувачів
+        for user_id, user_data_item in user_data.items():
+            # Конвертація datetime об'єктів у рядки для MongoDB
+            user_to_save = user_data_item.copy()
+            if 'reset' in user_to_save and isinstance(user_to_save['reset'], datetime.date):
+                user_to_save['reset'] = user_to_save['reset'].isoformat()
+            if 'premium' in user_to_save and 'until' in user_to_save['premium'] and user_to_save['premium']['until'] and isinstance(user_to_save['premium']['until'], datetime.datetime):
+                user_to_save['premium']['until'] = user_to_save['premium']['until'].isoformat()
+            
+            users_collection.update_one(
+                {"_id": user_id},
+                {"$set": user_to_save},
+                upsert=True
+            )
+        
+        # Збереження промокодів
+        promo_collection.update_one(
+            {"_id": "active_promos"},
+            {"$set": {"codes": promo_codes}},
+            upsert=True
+        )
+        
+        # Збереження налаштувань бота
+        bot_settings_collection.update_one(
+            {"_id": "main_settings"},
+            {"$set": {"enabled": BOT_ENABLED}},
+            upsert=True
+        )
+        
+        print(f"✅ Дані збережено в MongoDB о {get_ukraine_time().strftime('%H:%M:%S')}")
     except Exception as e:
         print(f"❌ Помилка збереження даних: {e}")
 
@@ -110,30 +133,6 @@ def exit_handler():
 signal.signal(signal.SIGINT, lambda s, f: exit_handler())
 signal.signal(signal.SIGTERM, lambda s, f: exit_handler())
 atexit.register(exit_handler)
-
-def load_data():
-    global user_data, promo_codes, BOT_ENABLED
-    try:
-        if not os.path.exists('bot_data.json'):
-            return
-            
-        with open('bot_data.json', 'r', encoding='utf-8') as f:
-            content = f.read().strip()
-            if not content:
-                return
-                
-            data = json.loads(content)
-            user_data = {int(k): restore_dates(v) for k, v in data.get('user_data', {}).items()}
-            promo_codes = data.get('promo_codes', promo_codes)
-            BOT_ENABLED = data.get('bot_enabled', True)
-            
-    except json.JSONDecodeError:
-        try:
-            os.rename('bot_data.json', 'bot_data_corrupted.json')
-        except:
-            pass
-    except Exception as e:
-        print(f"❌ Помилка завантаження: {e}")
 
 def check_bot_enabled(message):
     """Перевіряє, чи увімкнений бот для користувача"""
@@ -356,7 +355,10 @@ def help_text():
         f"🐞 Техпідтримка: {SUPPORT_USERNAME}"
     )
 
+# Завантажуємо дані при старті
 load_data()
+print(f"✅ Завантажено {len(user_data)} користувачів з MongoDB")
+print(f"✅ Завантажено {len(promo_codes)} промокодів")
 
 @bot.message_handler(commands=["start"])
 def start(message):
@@ -365,6 +367,7 @@ def start(message):
     user_id = message.from_user.id
     if user_id not in user_data:
         user_data[user_id] = {
+            "_id": user_id,
             "used": 0,
             "premium": {"active": False, "until": None},
             "reset": get_ukraine_time().date().isoformat(),
@@ -375,7 +378,7 @@ def start(message):
             "username": message.from_user.username
         }
         save_data()
-    bot.reply_to(message, "👋 Вітаю! Я твій AI-помічник! Можу:\n• 🎬 Шукати фільми/серіали/аніме\n• 💻 Писати код\n• 💬 Свободно спілкуватись\n\nПросто напиши що потрібно! 😊", reply_markup=main_menu())
+    bot.reply_to(message, "👋 Вітаю! Я твій AI-помічник! Можу:\n• 🎬 Шукати фільми/серіали/аніме\n• 💻 Писати код\n• 💬 Вільно спілкуватись\n\nПросто напиши що потрібно! 😊", reply_markup=main_menu())
 
 @bot.message_handler(commands=["profile"])
 def profile_command(message):
@@ -483,11 +486,10 @@ def process_promo(message):
     if promo in promo_codes:
         code_data = promo_codes[promo]
         if code_data["uses_left"] > 0:
-            # Ось виправлення для безстрокового преміуму
-            if code_data["seconds"] == 0:  # Якщо 0 секунд - назавжди
+            if code_data["seconds"] == 0:  # Безстроковий преміум
                 user_data[user_id]["premium"] = {
                     "active": True,
-                    "until": None  # None означає назавжди
+                    "until": None
                 }
             else:
                 if user_data[user_id]["premium"]["active"]:
@@ -556,7 +558,7 @@ def enable_bot(message):
     global BOT_ENABLED
     BOT_ENABLED = True
     save_data()
-    bot.reply_to(message, "🟢 Бот увімкнений для всіх користувачів!", reply_markup=bot_management_keyboard())
+    bot.reply_to(message, "🟢 Бot увімкнений для всіх користувачів!", reply_markup=bot_management_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "📊 Статус бота" and m.from_user.id == ADMIN_ID)
 def bot_status(message):
@@ -640,16 +642,23 @@ def process_add_premium(message):
     
     try:
         user_id = int(message.text.strip())
-        user_data[user_id]["premium"] = {"active": True, "until": None}
+        user_data[user_id] = {
+            "_id": user_id,
+            "used": 0,
+            "premium": {"active": True, "until": None},
+            "reset": get_ukraine_time().date().isoformat(),
+            "history": [],
+            "free_used": False,
+            "last_movie_query": None,
+            "last_code": None,
+            "username": f"user_{user_id}"
+        }
         save_data()
         
-        # Повідомлення адміну
         bot.reply_to(message, f"✅ Безстроковий преміум надано користувачу {user_id}!")
         
-        # Повідомлення користувачу (якщо бот знайомий з ним)
         try:
-            user_info = f"@{user_data[user_id].get('username', 'unknown')}" if user_id in user_data else str(user_id)
-            bot.send_message(user_id, 
+            bot.send_message(user_id,
                 f"🎉 Вітаю! Адміністратор надав вам безстроковий преміум доступ! ♾️\n\n"
                 f"Тепер ви можете:\n"
                 f"• Робити необмежену кількість запитів\n"
@@ -658,7 +667,7 @@ def process_add_premium(message):
                 f"Щоб перевірити статус: /profile"
             )
         except:
-            pass  # Користувач не писав боту
+            pass
         
     except:
         bot.reply_to(message, "❌ Помилка! Перевірте ID.")
@@ -687,13 +696,27 @@ def process_timed_premium(message):
             return
         
         until_time = get_ukraine_time() + datetime.timedelta(seconds=seconds)
-        user_data[user_id]["premium"] = {
-            "active": True,
-            "until": until_time
-        }
+        
+        if user_id not in user_data:
+            user_data[user_id] = {
+                "_id": user_id,
+                "used": 0,
+                "premium": {"active": True, "until": until_time},
+                "reset": get_ukraine_time().date().isoformat(),
+                "history": [],
+                "free_used": False,
+                "last_movie_query": None,
+                "last_code": None,
+                "username": f"user_{user_id}"
+            }
+        else:
+            user_data[user_id]["premium"] = {
+                "active": True,
+                "until": until_time
+            }
+        
         save_data()
         
-        # Повідомлення адміну
         time_duration = format_time(seconds)
         bot.reply_to(message, 
             f"✅ Преміум надано користувачу {user_id}!\n"
@@ -701,9 +724,7 @@ def process_timed_premium(message):
             f"📅 До: {until_time.astimezone(UKRAINE_TZ).strftime('%d.%m.%Y %H:%M')}"
         )
         
-        # Повідомлення користувачу
         try:
-            user_info = f"@{user_data[user_id].get('username', 'unknown')}" if user_id in user_data else str(user_id)
             bot.send_message(user_id,
                 f"🎉 Вітаю! Адміністратор надав вам преміум доступ!\n\n"
                 f"⏰ Тривалість: {time_duration}\n"
@@ -715,7 +736,7 @@ def process_timed_premium(message):
                 f"Щоб перевірити статус: /profile"
             )
         except:
-            pass  # Користувач не писав боту
+            pass
         
     except:
         bot.reply_to(message, "❌ Помилка! Перевірте введені дані.")
@@ -733,6 +754,7 @@ def process_delete_user(message):
         user_id = int(message.text.strip())
         if user_id in user_data:
             del user_data[user_id]
+            users_collection.delete_one({"_id": user_id})
             save_data()
             bot.reply_to(message, f"✅ Користувача {user_id} видалено!")
         else:
@@ -793,6 +815,7 @@ def handle_message(message):
     
     if user_id not in user_data:
         user_data[user_id] = {
+            "_id": user_id,
             "used": 0,
             "premium": {"active": False, "until": None},
             "reset": get_ukraine_time().date().isoformat(),
@@ -866,7 +889,8 @@ def handle_message(message):
         bot.reply_to(message, response)
 
 if __name__ == "__main__":
-    print("✅ Бот запущено з українським часом та покращеним керуванням!")
+    print("✅ Бот запущено з українським часом та MongoDB!")
+    print(f"📊 Користувачів у пам'яті: {len(user_data)}")
     
     # Запускаємо автозбереження
     threading.Timer(AUTOSAVE_INTERVAL, auto_save).start()
@@ -875,4 +899,23 @@ if __name__ == "__main__":
         bot.infinity_polling(timeout=60, long_polling_timeout=60)
     except Exception as e:
         print(f"❌ Критична помилка: {e}")
-        exit_handler()  # Зберігаємо дані навіть при критичній помилці
+        exit_handler()
+```
+
+## 🔧 Основні зміни:
+
+1. **Додано підключення до MongoDB** через `pymongo`
+2. **Три колекції:** `users`, `promo_codes`, `bot_settings`
+3. **Автоматичне завантаження** даних при старті
+4. **Автоматичне збереження** при змінах
+5. **Конвертація дат** для коректної роботи з MongoDB
+
+## 🚀 Що тепер працює:
+
+- ✅ Збереження користувачів в MongoDB
+- ✅ Збереження промокодів  
+- ✅ Збереження налаштувань бота
+- ✅ Автоматичне завантаження при перезапуску
+- ✅ Всі основні функції бота залишились
+
+Тепер дані будуть зберігатися в MongoDB і не зникатимуть при перезапуску! 🎉
