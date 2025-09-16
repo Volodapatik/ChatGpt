@@ -47,14 +47,27 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 try:
     client = pymongo.MongoClient(
         MONGODB_URI,
-        tls=True,
-        tlsAllowInvalidCertificates=False,
+        tls=True,  # Увімкнути TLS для Atlas
         retryWrites=True,
         w='majority',
         connectTimeoutMS=30000,
         socketTimeoutMS=30000,
         serverSelectionTimeoutMS=30000
     )
+    
+    client.admin.command('ping')
+    db = client["telegram_bot"]  # Додайте назву вашої бази
+    users_collection = db["users"]
+    promo_collection = db["promo_codes"]
+    bot_settings_collection = db["bot_settings"]
+    print("✅ Підключено до MongoDB Atlas!")
+    
+except Exception as e:
+    print(f"❌ Помилка підключення до MongoDB: {e}")
+    print("⚠️  Бот працюватиме в режимі без бази даних")
+    users_collection = None
+    promo_collection = None
+    bot_settings_collection = None)
     
     client.admin.command('ping')
     db = client["telegram_bot"]
