@@ -67,7 +67,7 @@ except Exception as e:
     print("⚠️  Бот працюватиме в режимі без бази даних")
     users_collection = None
     promo_collection = None
-    bot_settings_collection = None)
+    bot_settings_collection = None
     
     client.admin.command('ping')
     db = client["telegram_bot"]
