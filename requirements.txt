@@ -1,5 +1,5 @@
-pyTelegramBotAPI
-requests
-pymongo[srv]
-python-dotenv
-pytz
+pyTelegramBotAPI==4.29.1
+requests==2.32.4
+pymongo==4.15.0
+python-dotenv==1.1.1
+pytz==2023.3

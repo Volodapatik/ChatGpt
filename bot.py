@@ -12,7 +12,6 @@ import threading
 import pymongo
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
-# ==========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -21,10 +20,8 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", 1637885523))
 MONGODB_URI = os.getenv("MONGODB_URI")
 FREE_LIMIT = 30
 SUPPORT_USERNAME = "@uagptpredlozhkabot"
-AUTOSAVE_INTERVAL = 300  # Автозбереження кожні 5 хвилин (300 секунд)
-# ==========================
+AUTOSAVE_INTERVAL = 300
 
-# Глобальні змінні (ініціалізуємо спочатку)
 user_data = {}
 promo_codes = {
     "TEST1H": {"seconds": 3600, "uses_left": 50},
@@ -34,7 +31,6 @@ promo_codes = {
 }
 BOT_ENABLED = True
 
-# Списки ключових слів
 MOVIE_SITES = [
     "imdb.com", "myanimelist.net", "anidb.net", "anime-planet.com",
     "anilist.co", "animego.org", "shikimori.one", "anime-news-network.com",
@@ -44,27 +40,36 @@ MOVIE_SITES = [
 movie_keywords = ["фільм", "серіал", "аніме", "мультфільм", "movie", "anime", "series", "кіно", "фильм", "сюжет", "сюжету", "опис"]
 code_keywords = ["код", "html", "css", "js", "javascript", "python", "створи", "скрипт", "програма", "create", "program"]
 
-# Українська часова зона
 UKRAINE_TZ = pytz.timezone('Europe/Kiev')
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Підключення до MongoDB
 try:
-    client = pymongo.MongoClient(MONGODB_URI, tls=True, tlsAllowInvalidCertificates=True)
+    client = pymongo.MongoClient(
+        MONGODB_URI,
+        tls=True,
+        tlsAllowInvalidCertificates=False,
+        retryWrites=True,
+        w='majority',
+        connectTimeoutMS=30000,
+        socketTimeoutMS=30000,
+        serverSelectionTimeoutMS=30000
+    )
+    
+    client.admin.command('ping')
     db = client["telegram_bot"]
     users_collection = db["users"]
     promo_collection = db["promo_codes"]
     bot_settings_collection = db["bot_settings"]
     print("✅ Підключено до MongoDB")
+    
 except Exception as e:
     print(f"❌ Помилка підключення до MongoDB: {e}")
-    # Створюємо заглушки для колекцій
+    print("⚠️  Бот працюватиме в режимі без бази даних")
     users_collection = None
     promo_collection = None
     bot_settings_collection = None
 
-# Завантаження даних з MongoDB
 def load_data():
     global user_data, promo_codes, BOT_ENABLED
     
@@ -73,11 +78,9 @@ def load_data():
         return
     
     try:
-        # Завантаження користувачів
         user_data = {}
         for user in users_collection.find():
             user_data[user['_id']] = user
-            # Конвертація рядків дат назад у datetime об'єкти
             if 'reset' in user and isinstance(user['reset'], str):
                 user_data[user['_id']]['reset'] = datetime.date.fromisoformat(user['reset'])
             if 'premium' in user and 'until' in user['premium'] and user['premium']['until'] and isinstance(user['premium']['until'], str):
@@ -86,19 +89,16 @@ def load_data():
                     dt = UKRAINE_TZ.localize(dt)
                 user_data[user['_id']]['premium']['until'] = dt
         
-        # Завантаження промокодів
         promo_doc = promo_collection.find_one({"_id": "active_promos"})
         if promo_doc:
             promo_codes = promo_doc.get('codes', {})
         else:
-            # Якщо немає промокодів в базі, зберігаємо дефолтні
             promo_collection.update_one(
                 {"_id": "active_promos"},
                 {"$set": {"codes": promo_codes}},
                 upsert=True
             )
         
-        # Завантаження налаштувань бота
         settings = bot_settings_collection.find_one({"_id": "main_settings"})
         if settings:
             BOT_ENABLED = settings.get('enabled', True)
@@ -113,7 +113,6 @@ def load_data():
         print(f"❌ Помилка завантаження даних: {e}")
 
 def get_ukraine_time():
-    """Повертає поточний час України"""
     return datetime.datetime.now(UKRAINE_TZ)
 
 def save_data():
@@ -122,9 +121,7 @@ def save_data():
             print("❌ MongoDB не підключено, пропускаємо збереження")
             return
             
-        # Збереження користувачів
         for user_id, user_data_item in user_data.items():
-            # Конвертація datetime об'єктів у рядки для MongoDB
             user_to_save = user_data_item.copy()
             if 'reset' in user_to_save and isinstance(user_to_save['reset'], datetime.date):
                 user_to_save['reset'] = user_to_save['reset'].isoformat()
@@ -137,14 +134,12 @@ def save_data():
                 upsert=True
             )
         
-        # Збереження промокодів
         promo_collection.update_one(
             {"_id": "active_promos"},
             {"$set": {"codes": promo_codes}},
             upsert=True
         )
         
-        # Збереження налаштувань бота
         bot_settings_collection.update_one(
             {"_id": "main_settings"},
             {"$set": {"enabled": BOT_ENABLED}},
@@ -156,23 +151,18 @@ def save_data():
         print(f"❌ Помилка збереження даних: {e}")
 
 def auto_save():
-    """Функція для регулярного автозбереження"""
     save_data()
-    # Перезапускаємо таймер
     threading.Timer(AUTOSAVE_INTERVAL, auto_save).start()
 
 def exit_handler():
-    """Функція, яка викликається при завершенні роботи"""
     print("\n🛑 Завершення роботи... Зберігаємо дані.")
     save_data()
 
-# Додаємо обробник для сигналів завершення
 signal.signal(signal.SIGINT, lambda s, f: exit_handler())
 signal.signal(signal.SIGTERM, lambda s, f: exit_handler())
 atexit.register(exit_handler)
 
 def check_bot_enabled(message):
-    """Перевіряє, чи увімкнений бот для користувача"""
     if not BOT_ENABLED and message.from_user.id != ADMIN_ID:
         maintenance_text = (
             "🔧 **Технічні роботи**\n"
@@ -413,7 +403,6 @@ def start(message):
             "username": message.from_user.username
         }
     else:
-        # ОНОВЛЮЄМО username якщо користувач вже існує
         user_data[user_id]["username"] = message.from_user.username
     
     save_data()
@@ -531,7 +520,7 @@ def process_promo(message):
     if promo in promo_codes:
         code_data = promo_codes[promo]
         if code_data["uses_left"] > 0:
-            if code_data["seconds"] == 0:  # Безстроковий преміум
+            if code_data["seconds"] == 0:
                 user_data[user_id]["premium"] = {
                     "active": True,
                     "until": None
@@ -694,7 +683,6 @@ def process_add_premium(message):
         user_id = int(message.text.strip())
         username = "user_" + str(user_id)
         
-        # Спроба отримати username з повідомлення
         if message.forward_from:
             username = message.forward_from.username or username
         elif message.reply_to_message and message.reply_to_message.from_user:
@@ -886,7 +874,6 @@ def handle_message(message):
         }
         save_data()
     else:
-        # ОНОВЛЮЄМО username при кожному повідомленні
         user_data[user_id]["username"] = message.from_user.username
         save_data()
     
@@ -955,7 +942,6 @@ if __name__ == "__main__":
     print("✅ Бот запущено з українським часом та MongoDB!")
     print(f"📊 Користувачів у пам'яті: {len(user_data)}")
     
-    # Запускаємо автозбереження
     threading.Timer(AUTOSAVE_INTERVAL, auto_save).start()
     
     try:
